@@ -729,6 +729,7 @@
       cwd: "",
       sessionId: null,
       screenText: "",
+      draft: "",
       transcriptEl: el,
       btnEl: btn, ledEl: led, nameEl: name,
     };
@@ -751,6 +752,26 @@
     if (!tab.sessionId) return;
     savedNames[tab.sessionId] = name;
     localStorage.setItem("cp.names", JSON.stringify(savedNames));
+  }
+
+  // Composer drafts, one per channel, remembered by session id.
+  const savedDrafts = JSON.parse(localStorage.getItem("cp.drafts") || "{}");
+  function persistDraft(tab) {
+    if (!tab.sessionId) return;
+    clearTimeout(tab.draftTimer);
+    tab.draftTimer = setTimeout(() => {
+      if (tab.draft) savedDrafts[tab.sessionId] = tab.draft;
+      else delete savedDrafts[tab.sessionId];
+      localStorage.setItem("cp.drafts", JSON.stringify(savedDrafts));
+    }, 300);
+  }
+  function dropDraft(tab) {
+    clearTimeout(tab.draftTimer);
+    tab.draft = "";
+    if (tab.sessionId && tab.sessionId in savedDrafts) {
+      delete savedDrafts[tab.sessionId];
+      localStorage.setItem("cp.drafts", JSON.stringify(savedDrafts));
+    }
   }
 
   /** Inline rename of a channel (double-click on its name). */
@@ -789,6 +810,7 @@
     // attached to the session anymore (and "End session" stops it
     // explicitly for everyone).
     if (tab.ws && tab.ws.readyState === WebSocket.OPEN) tab.ws.close();
+    dropDraft(tab);
     tab.btnEl.remove();
     tab.transcriptEl.remove();
     tabs = tabs.filter((t) => t !== tab);
@@ -823,11 +845,17 @@
   }
 
   function activate(tab) {
+    if (active && active !== tab) {
+      active.draft = promptInput.value;
+      persistDraft(active);
+    }
     active = tab;
     tabs.forEach((t) => {
       t.btnEl.classList.toggle("active", t === tab);
       t.transcriptEl.hidden = t !== tab;
     });
+    promptInput.value = tab.draft;
+    autosizePrompt();
     refreshChrome();
     if (tab.status !== "setup") {
       tab.transcriptEl.scrollTop = tab.transcriptEl.scrollHeight;
@@ -1095,6 +1123,15 @@
             t.customName = true;
             t.nameEl.textContent = savedNames[msg.sessionId];
           }
+          // Draft remembered for this session (channels restored on load
+          // only learn their session id here).
+          if (!t.draft && savedDrafts[msg.sessionId]) {
+            t.draft = savedDrafts[msg.sessionId];
+            if (t === active) {
+              promptInput.value = t.draft;
+              autosizePrompt();
+            }
+          }
         }
         setTabState(t, "ready", "ready");
         persistChannels();
@@ -1226,6 +1263,7 @@
     t.ws.send(JSON.stringify({ type: "prompt", text }));
     promptInput.value = "";
     promptInput.style.height = "auto";
+    dropDraft(t);
   });
   promptInput.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -1233,9 +1271,14 @@
       composer.requestSubmit();
     }
   });
-  promptInput.addEventListener("input", () => {
+  function autosizePrompt() {
     promptInput.style.height = "auto";
     promptInput.style.height = Math.min(promptInput.scrollHeight, 160) + "px";
+  }
+  promptInput.addEventListener("input", () => {
+    autosizePrompt();
+    active.draft = promptInput.value;
+    persistDraft(active);
   });
 
   $("toggleMachine").addEventListener("click", () => machine.classList.toggle("open"));
