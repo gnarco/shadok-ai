@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { listSessions } from "./extract.js";
 
 export interface Worktree {
   /** Working directory of the isolated checkout. */
@@ -58,6 +59,89 @@ export function removeWorktreeIfClean(wt: Worktree): void {
   } catch {
     // Dirty or has commits: leave it in place for the user to merge/inspect.
   }
+}
+
+/**
+ * Ensures a worktree checkout exists at `dir` for `branch`, recreating it
+ * from the branch if it was removed. Lets a past session be reopened even
+ * after its folder was reclaimed (the branch always survives).
+ */
+export function ensureWorktreeCheckout(repo: string, branch: string, dir: string): boolean {
+  if (fs.existsSync(dir)) return true;
+  try {
+    fs.mkdirSync(path.dirname(dir), { recursive: true });
+    git(repo, ["worktree", "add", dir, branch]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export interface PastSession {
+  branch: string;
+  /** Full session id (from the transcript), or null if none was recorded. */
+  sessionId: string | null;
+  /** Worktree checkout path (may not exist on disk). */
+  cwd: string;
+  dirExists: boolean;
+  /** First user prompt of the session, for recognition. */
+  preview: string;
+  /** Commits ahead of the base branch. */
+  commits: number;
+  /** Whether the branch has any diff vs the base. */
+  hasChanges: boolean;
+  /** Last activity (ms since epoch). */
+  mtime: number;
+}
+
+/**
+ * Lists every past claudepilot worktree session of a repo — recoverable from
+ * their branch even if the checkout was reclaimed — newest first, so
+ * unfinished work can be reopened and continued.
+ */
+export function listPastSessions(repo: string): PastSession[] {
+  let base = "main";
+  try {
+    base = git(repo, ["rev-parse", "--abbrev-ref", "HEAD"]);
+  } catch {
+    return [];
+  }
+  let branches: string[];
+  try {
+    branches = git(repo, ["branch", "--list", "claudepilot/*", "--format=%(refname:short)"])
+      .split("\n")
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+  const repoName = path.basename(path.resolve(repo)).replace(/[^a-zA-Z0-9._-]/g, "-");
+  const out: PastSession[] = [];
+  for (const branch of branches) {
+    const tag = branch.replace(/^claudepilot\//, "");
+    const cwd = path.join(os.homedir(), ".claudepilot", "worktrees", `${repoName}-${tag}`);
+    // The transcript lives in the worktree's project dir even if the checkout
+    // was removed — read the full session id and preview from there.
+    const sess = listSessions(cwd)[0] ?? null;
+    let commits = 0;
+    let hasChanges = false;
+    try {
+      commits = Number(git(repo, ["rev-list", "--count", `${base}..${branch}`]) || "0");
+      hasChanges = git(repo, ["diff", "--shortstat", base, branch]).trim() !== "";
+    } catch {
+      // ignore
+    }
+    out.push({
+      branch,
+      sessionId: sess?.id ?? null,
+      cwd,
+      dirExists: fs.existsSync(cwd),
+      preview: sess?.preview ?? "",
+      commits,
+      hasChanges,
+      mtime: sess?.mtime ?? 0,
+    });
+  }
+  return out.sort((a, b) => b.mtime - a.mtime);
 }
 
 export interface DiffResult {

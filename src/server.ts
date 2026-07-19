@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,9 +16,10 @@ import { sessionFilePath, tailSession } from "./tail.js";
 import { getUsage } from "./usage.js";
 import {
   createWorktree,
+  ensureWorktreeCheckout,
   gitDiff,
   isGitRepo,
-  removeWorktreeIfClean,
+  listPastSessions,
   type Worktree,
 } from "./worktree.js";
 
@@ -45,12 +47,31 @@ app.get("/diff", (req, res) => {
   if (!s) return res.json({ status: "", diff: "", branch: null, error: "no such session" });
   res.json(gitDiff(s.cwd, s.worktree?.baseSha ?? null));
 });
+// Past worktree sessions of a repo (for reopening unfinished work).
+app.get("/recover", (req, res) => {
+  const repo = String(req.query.repo ?? "").trim() || process.cwd();
+  res.json(isGitRepo(repo) ? listPastSessions(repo) : []);
+});
+// Server-side defaults (the launch directory pre-fills the working dir field).
+app.get("/defaults", (_req, res) => {
+  res.json({ cwd: process.cwd() });
+});
 
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: "/ws" });
 
 type ClientMessage =
-  | { type: "start"; cwd?: string; resume?: string; continue?: boolean; worktree?: boolean }
+  | {
+      type: "start";
+      cwd?: string;
+      resume?: string;
+      continue?: boolean;
+      worktree?: boolean;
+      /** Reopen: recreate this worktree branch's checkout if it was reclaimed. */
+      branch?: string;
+      /** Reopen: the repo the worktree belongs to (to recreate the checkout). */
+      repo?: string;
+    }
   | { type: "prompt"; text: string }
   | { type: "choose"; n: number }
   | { type: "toggle"; n: number }
@@ -79,7 +100,17 @@ interface Live {
   stopTail: (() => void) | null;
   /** Isolated git worktree, when the session runs in one. */
   worktree: Worktree | null;
+  /** Reclaim timer armed when no client is attached. */
+  idleTimer: ReturnType<typeof setTimeout> | null;
 }
+
+/**
+ * How long a session with no attached client is kept alive before being
+ * reclaimed. Closing a tab or reloading detaches but does NOT kill the agent;
+ * you reattach on return and the running turn continues. Set 0 to keep
+ * sessions until the process exits or an explicit End.
+ */
+const IDLE_RECLAIM_MS = Number(process.env.CLAUDEPILOT_IDLE_MIN ?? 60) * 60_000;
 
 const sessions = new Map<string, Live>();
 
@@ -93,20 +124,27 @@ function broadcast(s: Live, msg: object, except?: WebSocket) {
 function destroySession(s: Live) {
   if (s.screenTimer) clearInterval(s.screenTimer);
   s.screenTimer = null;
+  if (s.idleTimer) clearTimeout(s.idleTimer);
+  s.idleTimer = null;
   s.stopTail?.();
   s.stopTail = null;
   s.pilot.kill();
-  // Reclaim the worktree only if the agent left it clean; dirty ones are
-  // kept so the user can inspect/merge the changes.
-  if (s.worktree) removeWorktreeIfClean(s.worktree);
+  // Worktrees are durable: never auto-removed. They persist (with their
+  // branch and any uncommitted changes) until an explicit merge/discard,
+  // so no work is ever silently lost.
   sessions.delete(s.id);
 }
 
 function detach(ws: WebSocket, s: Live) {
   s.clients.delete(ws);
-  // Last client gone: stop the process (the session stays resumable from
-  // its .jsonl file).
-  if (s.clients.size === 0) destroySession(s);
+  if (s.clients.size !== 0) return;
+  // No viewer attached: keep the agent running and reclaim only after a long
+  // idle, so reloading or closing a tab never aborts work.
+  if (IDLE_RECLAIM_MS <= 0) return;
+  if (s.idleTimer) clearTimeout(s.idleTimer);
+  s.idleTimer = setTimeout(() => {
+    if (s.clients.size === 0) destroySession(s);
+  }, IDLE_RECLAIM_MS);
 }
 
 async function createSession(
@@ -127,6 +165,7 @@ async function createSession(
     lastScreen: "",
     stopTail: null,
     worktree,
+    idleTimer: null,
   };
   pilot.onExit((code) => {
     broadcast(s, { type: "exited", code });
@@ -247,10 +286,32 @@ wss.on("connection", (ws: WebSocket) => {
             }
           }
 
+          // Reopen: if resuming into a worktree whose checkout was reclaimed,
+          // recreate it from its branch so the past session can continue.
+          if (resumed && msg.branch && msg.repo && !fs.existsSync(effectiveCwd)) {
+            ensureWorktreeCheckout(msg.repo, msg.branch, effectiveCwd);
+          }
+
+          // Guard against a vanished directory (e.g. a restored channel whose
+          // worktree was removed): spawning claude there would exit instantly
+          // with a cryptic error. Signal it clearly so the client can drop it.
+          if (!fs.existsSync(effectiveCwd)) {
+            return send({
+              type: "gone",
+              sessionId: id,
+              message: "working directory no longer exists: " + effectiveCwd,
+            });
+          }
+
           const existing = sessions.get(id);
           if (existing && !existing.pilot.hasExited) {
-            // Session already piloted: attach to it (shared process).
+            // Session already piloted: attach to it (shared process). Cancel
+            // any pending reclaim — a viewer is back.
             session = existing;
+            if (session.idleTimer) {
+              clearTimeout(session.idleTimer);
+              session.idleTimer = null;
+            }
             session.clients.add(ws);
             const turns = loadHistory(session.cwd, id);
             if (turns.length) send({ type: "history", turns });

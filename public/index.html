@@ -509,6 +509,38 @@
   .check input { accent-color: var(--amber); margin-top: 2px; }
   .check-hint { color: var(--text-dim); font-size: 12px; }
 
+  /* Recover-past-sessions list */
+  .recover-list { display: flex; flex-direction: column; gap: 6px; max-height: 260px; overflow-y: auto; }
+  .recover-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 8px 10px;
+    background: var(--bg-inset);
+  }
+  .recover-row .rmeta { flex: 1; min-width: 0; }
+  .recover-row .rprompt {
+    font-size: 13px;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .recover-row .rsub { font-family: var(--mono); font-size: 11px; color: var(--text-dim); }
+  .recover-row .badge {
+    font-family: var(--mono);
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 3px;
+    border: 1px solid var(--amber);
+    color: var(--amber);
+  }
+  .recover-row .badge.empty { border-color: var(--line); color: var(--text-dim); }
+  .recover-row button { flex: none; }
+  .recover-empty { color: var(--text-dim); font-size: 12px; font-style: italic; }
+
   /* Diff review panel */
   #diffpanel {
     width: 46%;
@@ -633,6 +665,10 @@
         <span>Isolate in a git worktree <span class="check-hint">— the agent edits a fresh branch; review &amp; merge from the Diff panel (new sessions only)</span></span>
       </label>
       <button class="primary" id="startBtn">Start session</button>
+      <div class="field" id="recoverField" hidden>
+        <span class="label">Reopen an unfinished session</span>
+        <div class="recover-list" id="recoverList"></div>
+      </div>
     </div>
 
     <div id="transcripts"></div>
@@ -693,6 +729,15 @@
   let tabs = [];
   let active = null;
   let seq = 0;
+  // The server's launch directory — the sensible default for new channels.
+  let serverCwd = "";
+  fetch("/defaults")
+    .then((r) => r.json())
+    .then((d) => {
+      serverCwd = d.cwd || "";
+      if (active && active.status === "setup" && !$("cwdInput").value) refreshChrome();
+    })
+    .catch(() => {});
 
   function basename(p) {
     const parts = p.replace(/\/+$/, "").split("/");
@@ -814,6 +859,14 @@
     localStorage.setItem("cp.channels", JSON.stringify(list));
   }
 
+  /** Drops a session id from the remembered channels (invalid / gone). */
+  function forgetChannel(sessionId) {
+    const list = JSON.parse(localStorage.getItem("cp.channels") || "[]").filter(
+      (s) => s.sessionId !== sessionId,
+    );
+    localStorage.setItem("cp.channels", JSON.stringify(list));
+  }
+
   function setTabState(tab, status, text) {
     tab.status = status;
     tab.stateText = text;
@@ -851,10 +904,15 @@
     thinking.classList.toggle("visible", t.status === "busy");
     screenEl.textContent = t.screenText;
     if (t.status === "setup") {
-      $("cwdInput").value = t.cwd || localStorage.getItem("cp.cwd") || "";
+      // Only pre-fill when empty — never clobber what the user is typing.
+      if (!$("cwdInput").value) {
+        $("cwdInput").value =
+          t.cwd || localStorage.getItem("cp.cwd") || serverCwd || "";
+      }
       const last = localStorage.getItem("cp.session");
       if (last && !$("resumeInput").value) $("resumeInput").value = last;
       $("startBtn").disabled = false;
+      refreshRecoverList();
     }
   }
 
@@ -1057,6 +1115,51 @@
     ws.addEventListener("message", (ev) => handleMessage(t, JSON.parse(ev.data)));
   }
 
+  /** Lists past worktree sessions of the setup's repo, each reopenable. */
+  async function refreshRecoverList() {
+    const cwd = $("cwdInput").value.trim();
+    const field = $("recoverField");
+    const listEl = $("recoverList");
+    if (!cwd) { field.hidden = true; return; }
+    let sessions = [];
+    try {
+      sessions = await (await fetch("/recover?repo=" + encodeURIComponent(cwd))).json();
+    } catch { sessions = []; }
+    if (!Array.isArray(sessions) || sessions.length === 0) { field.hidden = true; return; }
+    field.hidden = false;
+    listEl.innerHTML = "";
+    for (const s of sessions) {
+      const row = document.createElement("div");
+      row.className = "recover-row";
+      const meta = document.createElement("div");
+      meta.className = "rmeta";
+      const p = document.createElement("div");
+      p.className = "rprompt";
+      p.textContent = s.preview || "(no prompt)";
+      const sub = document.createElement("div");
+      sub.className = "rsub";
+      sub.textContent = s.branch + (s.dirExists ? "" : " · reclaimed");
+      meta.append(p, sub);
+      const badge = document.createElement("span");
+      const changed = s.commits > 0 || s.hasChanges;
+      badge.className = "badge" + (changed ? "" : " empty");
+      badge.textContent = changed
+        ? (s.commits > 0 ? s.commits + " commit" + (s.commits > 1 ? "s" : "") : "changes")
+        : "empty";
+      const btn = document.createElement("button");
+      btn.textContent = "Reopen";
+      btn.disabled = !s.sessionId;
+      btn.addEventListener("click", () => {
+        if (!s.sessionId) return;
+        const t = active;
+        if (!t.customName) { t.customName = true; t.nameEl.textContent = s.branch.replace("claudepilot/", "wt-"); }
+        launchTab(t, { resume: s.sessionId, cwd: s.cwd, branch: s.branch, repo: cwd });
+      });
+      row.append(meta, badge, btn);
+      listEl.appendChild(row);
+    }
+  }
+
   function startActiveTab() {
     const t = active;
     if (t.status !== "setup") return;
@@ -1141,9 +1244,19 @@
         t.screenText = msg.text;
         if (t === active) screenEl.textContent = msg.text;
         break;
+      case "gone":
+        // Session's directory is gone (e.g. a removed worktree): stop trying
+        // to restore it and forget it so it doesn't resurrect every reload.
+        addTurn(t, "system", "", msg.message);
+        forgetChannel(msg.sessionId);
+        setTabState(t, "dead", "directory gone");
+        break;
       case "error":
         addTurn(t, "system", "", "Error: " + msg.message);
-        if (t.status === "busy") setTabState(t, "ready", "ready");
+        // Failed before ever going live (e.g. a bad restore): mark dead so it
+        // doesn't hang on "connecting…".
+        if (t.status === "connecting") setTabState(t, "dead", "failed to start");
+        else if (t.status === "busy") setTabState(t, "ready", "ready");
         break;
       case "exited":
         addTurn(t, "system", "", "The claude process exited (code " + msg.code + ").");
@@ -1215,6 +1328,7 @@
   );
   $("cwdInput").addEventListener("change", () => {
     if (!$("resumeField").hidden) refreshSessionList();
+    refreshRecoverList();
   });
 
   composer.addEventListener("submit", (e) => {
