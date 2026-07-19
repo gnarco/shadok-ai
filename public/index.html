@@ -1,0 +1,1348 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>claudepilot — cockpit</title>
+<style>
+  :root {
+    --bg: #14161d;
+    --bg-raised: #1b1e27;
+    --bg-inset: #0e1015;
+    --line: #2a2e3b;
+    --text: #d8dae2;
+    --text-dim: #7d8293;
+    --amber: #f0a848;
+    --amber-soft: rgba(240, 168, 72, 0.12);
+    --phosphor: #ffb45c;
+    --ok: #7fc97f;
+    --err: #e07a6a;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 15px;
+    display: flex;
+    flex-direction: column;
+  }
+  .label {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+  }
+
+  /* ── Instrument bar ──────────────────────────────────── */
+  header {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--line);
+    background: var(--bg-raised);
+    flex-wrap: wrap;
+  }
+  header .brand {
+    font-family: var(--mono);
+    font-size: 14px;
+    color: var(--amber);
+    letter-spacing: 0.06em;
+  }
+  header .brand::before { content: "◆ "; }
+  .gauge { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .gauge .value {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 260px;
+  }
+  .led {
+    display: inline-block;
+    width: 9px; height: 9px;
+    border-radius: 50%;
+    background: #3a3f4e;
+    vertical-align: -1px;
+    margin-right: 6px;
+    flex: none;
+  }
+  .led.on { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
+  .led.busy { background: var(--amber); box-shadow: 0 0 8px var(--amber); animation: breathe 1.2s ease-in-out infinite; }
+  .led.off { background: var(--err); }
+  @keyframes breathe { 50% { opacity: 0.35; } }
+  @media (prefers-reduced-motion: reduce) { .led.busy { animation: none; } }
+  header .spacer { flex: 1; }
+  /* Quota gauges (5h / 7d subscription usage) */
+  .quota { min-width: 92px; }
+  .quota .meter {
+    height: 6px;
+    background: var(--bg-inset);
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    overflow: hidden;
+    margin: 1px 0;
+  }
+  .quota .fill {
+    display: block;
+    height: 100%;
+    width: 0%;
+    background: var(--ok);
+    transition: width 0.4s ease;
+  }
+  .quota.warn .fill { background: var(--amber); }
+  .quota.crit .fill { background: var(--err); }
+  .quota .qpct {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-dim);
+    white-space: nowrap;
+  }
+  button {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.06em;
+    background: transparent;
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 6px 12px;
+    cursor: pointer;
+  }
+  button:hover { border-color: var(--amber); color: var(--amber); }
+  button:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+  button.primary { background: var(--amber); border-color: var(--amber); color: #1a1205; font-weight: 600; }
+  button.primary:hover { filter: brightness(1.1); }
+  button:disabled { opacity: 0.4; cursor: default; }
+
+  /* ── Channels (left column) ──────────────────────────── */
+  #tabbar {
+    width: 220px;
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    background: var(--bg-raised);
+    border-right: 1px solid var(--line);
+    padding: 12px 8px;
+    overflow-y: auto;
+  }
+  #tabbar .side-label { padding: 0 8px 8px; }
+  .tab {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text-dim);
+    border-left: 2px solid transparent;
+    border-radius: 4px;
+    padding: 9px 10px;
+    cursor: pointer;
+    user-select: none;
+  }
+  .tab:hover { color: var(--text); background: var(--bg-inset); }
+  .tab.active {
+    color: var(--amber);
+    border-left-color: var(--amber);
+    background: var(--amber-soft);
+    border-radius: 0 4px 4px 0;
+  }
+  .tab .name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .tab input.rename {
+    flex: 1;
+    min-width: 0;
+    font-family: var(--mono);
+    font-size: 12px;
+    background: var(--bg-inset);
+    border: 1px solid var(--amber);
+    border-radius: 3px;
+    color: var(--text);
+    padding: 2px 5px;
+  }
+  .tab .close {
+    color: var(--text-dim);
+    font-size: 13px;
+    line-height: 1;
+    padding: 0 2px;
+    flex: none;
+  }
+  .tab .close:hover { color: var(--err); }
+  #newTab {
+    margin-top: 8px;
+    border: 1px dashed var(--line);
+    font-size: 12px;
+    color: var(--text-dim);
+    padding: 8px;
+  }
+  #newTab:hover { color: var(--amber); border-color: var(--amber); }
+  @media (max-width: 900px) { #tabbar { width: 150px; } }
+
+  /* ── Body ────────────────────────────────────────────── */
+  main { flex: 1; display: flex; min-height: 0; }
+  .chat-pane { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+
+  /* Start screen */
+  #setup {
+    margin: auto;
+    width: min(520px, 92vw);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--bg-raised);
+    padding: 28px;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+  }
+  #setup h1 { font-family: var(--mono); font-size: 16px; color: var(--amber); font-weight: 500; }
+  #setup p.hint { color: var(--text-dim); font-size: 13px; line-height: 1.5; }
+  .field { display: flex; flex-direction: column; gap: 6px; }
+  input[type="text"] {
+    font-family: var(--mono);
+    font-size: 13px;
+    background: var(--bg-inset);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    color: var(--text);
+    padding: 9px 10px;
+  }
+  input[type="text"]:focus-visible { outline: 2px solid var(--amber); outline-offset: 1px; }
+  .radio-row { display: flex; gap: 14px; flex-wrap: wrap; }
+  .radio-row label { display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }
+  input[type="radio"] { accent-color: var(--amber); }
+
+  /* Session picker (resume by id) */
+  .session-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 230px;
+    overflow-y: auto;
+  }
+  .session-list .empty {
+    color: var(--text-dim);
+    font-size: 12.5px;
+    font-style: italic;
+    padding: 4px 0;
+  }
+  .session-item {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 3px;
+    text-align: left;
+    width: 100%;
+    padding: 8px 10px;
+    font-family: var(--sans);
+    letter-spacing: 0;
+  }
+  .session-item .sid { font-family: var(--mono); font-size: 11px; color: var(--amber); }
+  .session-item .meta { font-family: var(--mono); font-size: 11px; color: var(--text-dim); }
+  .session-item .preview {
+    font-size: 12.5px;
+    color: var(--text);
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .session-item.selected { border-color: var(--amber); background: var(--amber-soft); }
+
+  /* Transcripts (one per channel) */
+  #transcripts { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .transcript {
+    flex: 1;
+    overflow-y: auto;
+    padding: 22px 22px 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  .turn { display: flex; flex-direction: column; gap: 4px; max-width: 82%; }
+  .turn.user { align-self: flex-end; align-items: flex-end; }
+  .turn.claude { align-self: flex-start; }
+  .bubble {
+    padding: 10px 14px;
+    border-radius: 6px;
+    font-size: 14px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .turn.user .bubble {
+    background: var(--amber-soft);
+    border: 1px solid rgba(240, 168, 72, 0.35);
+  }
+  .turn.claude .bubble {
+    background: var(--bg-inset);
+    border: 1px solid var(--line);
+    font-family: var(--mono);
+    font-size: 13px;
+    /* Wrap long prose lines so nothing is clipped; still preserves the
+       TUI's own newlines. (Wide tables come through history as real HTML.) */
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow-x: auto;
+  }
+  /* History replayed from the .jsonl: raw markdown → HTML rendering. */
+  .turn.hist { opacity: 0.8; }
+  .bubble.md {
+    white-space: normal;
+    word-break: break-word;
+    font-family: var(--sans);
+    font-size: 14px;
+  }
+  .bubble.md p { margin: 6px 0; }
+  .bubble.md p:first-child { margin-top: 0; }
+  .bubble.md p:last-child { margin-bottom: 0; }
+  .bubble.md h1, .bubble.md h2, .bubble.md h3, .bubble.md h4 {
+    margin: 12px 0 6px;
+    font-size: 15px;
+    color: var(--amber);
+  }
+  .bubble.md ul, .bubble.md ol { margin: 6px 0 6px 22px; }
+  .bubble.md li { margin: 3px 0; }
+  .bubble.md code {
+    font-family: var(--mono);
+    font-size: 12.5px;
+    background: var(--bg-raised);
+    border-radius: 3px;
+    padding: 1px 5px;
+  }
+  .bubble.md pre {
+    background: var(--bg-raised);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 10px 12px;
+    margin: 8px 0;
+    overflow-x: auto;
+  }
+  .bubble.md pre code { background: none; padding: 0; }
+  .bubble.md table {
+    border-collapse: collapse;
+    margin: 8px 0;
+    font-size: 13px;
+    display: block;
+    overflow-x: auto;
+    max-width: 100%;
+  }
+  .bubble.md th, .bubble.md td {
+    border: 1px solid var(--line);
+    padding: 5px 10px;
+    text-align: left;
+    white-space: nowrap;
+  }
+  .bubble.md th {
+    color: var(--amber);
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  .bubble.md a { color: var(--amber); }
+  .bubble.md blockquote {
+    border-left: 2px solid var(--amber);
+    padding-left: 10px;
+    color: var(--text-dim);
+    margin: 6px 0;
+  }
+  .turn.system .bubble {
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    font-size: 12.5px;
+    font-style: italic;
+    padding: 2px 0;
+  }
+  /* Streamed tool-use activity line. */
+  .turn.tool-line { max-width: 82%; }
+  .turn.tool-line .bubble {
+    background: none;
+    border: none;
+    border-left: 2px solid var(--line);
+    border-radius: 0;
+    color: var(--text-dim);
+    font-family: var(--mono);
+    font-size: 12px;
+    padding: 2px 0 2px 10px;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  /* Tool output block. */
+  .turn.result { max-width: 82%; gap: 0; }
+  .turn.result .result-body {
+    background: var(--bg-inset);
+    border: 1px solid var(--line);
+    border-left: 2px solid var(--text-dim);
+    border-radius: 0 4px 4px 0;
+    color: var(--text-dim);
+    font-family: var(--mono);
+    font-size: 11.5px;
+    line-height: 1.4;
+    padding: 8px 10px;
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow-x: auto;
+  }
+  .turn.result.err .result-body { border-left-color: var(--err); color: var(--err); }
+  .result-more {
+    align-self: flex-start;
+    border: none;
+    background: none;
+    color: var(--amber);
+    font-size: 11px;
+    padding: 3px 0 0 10px;
+  }
+  .result-more:hover { text-decoration: underline; }
+
+  /* Choice dialog (TUI question rendered clickable) */
+  .turn.dialog .bubble {
+    background: var(--bg-inset);
+    border: 1px solid var(--amber);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .turn.dialog .question { font-size: 14px; line-height: 1.5; }
+  .choice {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 3px;
+    text-align: left;
+    width: 100%;
+    padding: 9px 12px;
+    font-family: var(--sans);
+    letter-spacing: 0;
+  }
+  .choice .num { color: var(--amber); font-family: var(--mono); font-size: 12px; }
+  .choice .hint { color: var(--text-dim); font-size: 12.5px; }
+  .choice:disabled { opacity: 0.45; }
+  .choice.chosen { border-color: var(--amber); color: var(--amber); opacity: 1; }
+  .choice.checked { border-color: var(--amber); }
+  .choice.checked .num { color: var(--amber); }
+  .validate { align-self: flex-end; margin-top: 2px; }
+  .freetext-row { display: flex; gap: 8px; width: 100%; }
+  .freetext-row input { flex: 1; }
+  #thinking { display: none; align-self: flex-start; color: var(--text-dim); font-family: var(--mono); font-size: 12.5px; padding: 0 22px 6px; }
+  #thinking.visible { display: block; }
+
+  /* Composer */
+  #composer {
+    display: flex;
+    gap: 10px;
+    padding: 14px 22px 18px;
+    border-top: 1px solid var(--line);
+    background: var(--bg-raised);
+  }
+  #composer textarea {
+    flex: 1;
+    font-family: var(--sans);
+    font-size: 14px;
+    background: var(--bg-inset);
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 10px 12px;
+    resize: none;
+    min-height: 42px;
+    max-height: 160px;
+    line-height: 1.45;
+  }
+  #composer textarea:focus-visible { outline: 2px solid var(--amber); outline-offset: 1px; }
+
+  /* ── Engine room (live terminal) ─────────────────────── */
+  #machine {
+    width: 46%;
+    max-width: 760px;
+    border-left: 1px solid var(--line);
+    background: var(--bg-inset);
+    display: none;
+    flex-direction: column;
+    min-width: 0;
+  }
+  #machine.open { display: flex; }
+  #machine .mhead {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--line);
+  }
+  #screen {
+    flex: 1;
+    overflow: auto;
+    padding: 14px;
+    font-family: var(--mono);
+    font-size: 11px;
+    line-height: 1.35;
+    white-space: pre;
+    color: var(--phosphor);
+    text-shadow: 0 0 8px rgba(255, 180, 92, 0.25);
+  }
+  .keys {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    padding: 10px 14px;
+    border-top: 1px solid var(--line);
+  }
+  .keys button { padding: 5px 10px; font-size: 11px; background: var(--bg-raised); }
+  .keys .settle { margin-left: auto; color: var(--amber); }
+
+  /* Worktree checkbox */
+  .check { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; cursor: pointer; }
+  .check input { accent-color: var(--amber); margin-top: 2px; }
+  .check-hint { color: var(--text-dim); font-size: 12px; }
+
+  /* Diff review panel */
+  #diffpanel {
+    width: 46%;
+    max-width: 760px;
+    border-left: 1px solid var(--line);
+    background: var(--bg-inset);
+    display: none;
+    flex-direction: column;
+    min-width: 0;
+  }
+  #diffpanel.open { display: flex; }
+  #diffpanel .mhead {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--line);
+  }
+  #diffpanel .mhead button { margin-left: 6px; }
+  #diffStatus {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--text-dim);
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--line);
+    white-space: pre-wrap;
+    max-height: 25%;
+    overflow-y: auto;
+  }
+  #diffStatus:empty { display: none; }
+  #diffBody {
+    flex: 1;
+    overflow: auto;
+    padding: 12px 14px;
+    margin: 0;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    line-height: 1.45;
+    white-space: pre;
+    color: var(--text);
+  }
+  /* diff coloring */
+  #diffBody .add { color: var(--ok); }
+  #diffBody .del { color: var(--err); }
+  #diffBody .hunk { color: var(--amber); }
+  #diffBody .meta { color: var(--text-dim); }
+
+  @media (max-width: 900px) {
+    #machine, #diffpanel { position: fixed; inset: 0; width: auto; max-width: none; z-index: 10; border-left: none; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <span class="brand">claudepilot</span>
+  <div class="gauge">
+    <span class="label">Status</span>
+    <span class="value"><span id="led" class="led"></span><span id="state">—</span></span>
+  </div>
+  <div class="gauge">
+    <span class="label">Directory</span>
+    <span class="value" id="cwdView">—</span>
+  </div>
+  <div class="gauge">
+    <span class="label">Session</span>
+    <span class="value" id="sessionView">—</span>
+  </div>
+  <div class="gauge" id="branchGauge" hidden>
+    <span class="label">Branch</span>
+    <span class="value" id="branchView">—</span>
+  </div>
+  <span class="spacer"></span>
+  <div class="gauge quota" id="quota5h" title="5-hour rolling limit">
+    <span class="label">5h</span>
+    <div class="meter"><span class="fill"></span></div>
+    <span class="qpct">—</span>
+  </div>
+  <div class="gauge quota" id="quota7d" title="7-day rolling limit">
+    <span class="label">7d</span>
+    <div class="meter"><span class="fill"></span></div>
+    <span class="qpct">—</span>
+  </div>
+  <button id="toggleDiff">Diff</button>
+  <button id="toggleMachine">Terminal</button>
+  <button id="stopBtn">End session</button>
+</header>
+
+<main>
+  <nav id="tabbar" aria-label="Channels">
+    <div class="label side-label">Channels</div>
+    <button id="newTab" title="New channel">＋ new channel</button>
+  </nav>
+
+  <section class="chat-pane">
+
+    <div id="setup" hidden>
+      <h1>New link</h1>
+      <p class="hint">Starts a real Claude Code session, driven inside a
+      pseudo-terminal. Each channel is an independent session — open as many
+      channels as you want Claudes working in parallel.</p>
+      <div class="field">
+        <span class="label">Working directory</span>
+        <input type="text" id="cwdInput" placeholder="/path/to/project">
+      </div>
+      <div class="field">
+        <span class="label">Resume</span>
+        <div class="radio-row">
+          <label><input type="radio" name="mode" value="new" checked> new session</label>
+          <label><input type="radio" name="mode" value="continue"> latest in directory</label>
+          <label><input type="radio" name="mode" value="resume"> by id</label>
+        </div>
+      </div>
+      <div class="field" id="resumeField" hidden>
+        <span class="label">Session id</span>
+        <input type="text" id="resumeInput" placeholder="5fe046dd-…">
+        <span class="label">Sessions in this directory</span>
+        <div class="session-list" id="sessionList"></div>
+      </div>
+      <label class="check" id="worktreeField">
+        <input type="checkbox" id="worktreeInput">
+        <span>Isolate in a git worktree <span class="check-hint">— the agent edits a fresh branch; review &amp; merge from the Diff panel (new sessions only)</span></span>
+      </label>
+      <button class="primary" id="startBtn">Start session</button>
+    </div>
+
+    <div id="transcripts"></div>
+    <div id="thinking">Claude is working…</div>
+
+    <form id="composer" hidden>
+      <textarea id="promptInput" rows="1"
+        placeholder="Write your prompt — Enter to send, Shift+Enter for a new line"></textarea>
+      <button type="submit" class="primary" id="sendBtn">Send</button>
+    </form>
+  </section>
+
+  <aside id="machine" aria-label="Live terminal screen">
+    <div class="mhead">
+      <span class="label">Engine room — live TUI screen</span>
+      <button id="closeMachine">Close</button>
+    </div>
+    <pre id="screen"></pre>
+    <div class="keys" role="group" aria-label="Keys">
+      <button data-key="escape">Esc</button>
+      <button data-key="enter">Enter</button>
+      <button data-key="up">↑</button>
+      <button data-key="down">↓</button>
+      <button data-key="tab">Tab</button>
+      <button data-key="1">1</button>
+      <button data-key="2">2</button>
+      <button data-key="3">3</button>
+      <button data-key="y">y</button>
+      <button data-key="n">n</button>
+      <button class="settle" id="settleBtn" title="Waits for the current turn to finish and updates the chat">Resync chat</button>
+    </div>
+  </aside>
+
+  <aside id="diffpanel" aria-label="Session changes">
+    <div class="mhead">
+      <span class="label">Changes — <span id="diffBranch">working tree</span></span>
+      <span>
+        <button id="refreshDiff">Refresh</button>
+        <button id="closeDiff">Close</button>
+      </span>
+    </div>
+    <div id="diffStatus"></div>
+    <pre id="diffBody"></pre>
+  </aside>
+</main>
+
+<script src="/vendor/marked.js"></script>
+<script>
+  const $ = (id) => document.getElementById(id);
+  const tabbar = $("tabbar"), newTabBtn = $("newTab");
+  const setup = $("setup"), transcripts = $("transcripts"), thinking = $("thinking");
+  const composer = $("composer"), promptInput = $("promptInput"), sendBtn = $("sendBtn");
+  const machine = $("machine"), screenEl = $("screen");
+
+  // ── Channels ────────────────────────────────────────────
+  // One channel = one WebSocket connection = one claude session server-side
+  // (sessions are shared: several clients can attach to the same id).
+  let tabs = [];
+  let active = null;
+  let seq = 0;
+
+  function basename(p) {
+    const parts = p.replace(/\/+$/, "").split("/");
+    return parts[parts.length - 1] || p || "session";
+  }
+
+  function createTab() {
+    seq++;
+    const el = document.createElement("div");
+    el.className = "transcript";
+    el.hidden = true;
+    transcripts.appendChild(el);
+
+    const btn = document.createElement("div");
+    btn.className = "tab";
+    const led = document.createElement("span");
+    led.className = "led";
+    const name = document.createElement("span");
+    name.className = "name";
+    name.textContent = "channel " + seq;
+    name.title = "Double-click to rename";
+    const close = document.createElement("span");
+    close.className = "close";
+    close.textContent = "×";
+    close.title = "Close this channel";
+    btn.append(led, name, close);
+    tabbar.insertBefore(btn, newTabBtn);
+
+    const tab = {
+      id: seq,
+      status: "setup",   // setup | connecting | ready | busy | dead
+      stateText: "not configured",
+      ws: null,
+      cwd: "",
+      sessionId: null,
+      screenText: "",
+      transcriptEl: el,
+      btnEl: btn, ledEl: led, nameEl: name,
+    };
+    btn.addEventListener("click", (e) => {
+      if (e.target === close) closeTab(tab);
+      else activate(tab);
+    });
+    name.addEventListener("dblclick", (e) => {
+      e.stopPropagation();
+      startRename(tab);
+    });
+    tabs.push(tab);
+    activate(tab);
+    return tab;
+  }
+
+  // Custom names, remembered by session id.
+  const savedNames = JSON.parse(localStorage.getItem("cp.names") || "{}");
+  function saveName(tab, name) {
+    if (!tab.sessionId) return;
+    savedNames[tab.sessionId] = name;
+    localStorage.setItem("cp.names", JSON.stringify(savedNames));
+  }
+
+  /** Inline rename of a channel (double-click on its name). */
+  function startRename(tab) {
+    const inp = document.createElement("input");
+    inp.type = "text";
+    inp.className = "rename";
+    inp.value = tab.nameEl.textContent;
+    tab.nameEl.replaceWith(inp);
+    inp.focus();
+    inp.select();
+    let done = false;
+    const commit = (cancel) => {
+      if (done) return;
+      done = true;
+      const v = inp.value.trim();
+      if (!cancel && v) {
+        tab.customName = true;
+        tab.nameEl.textContent = v;
+        saveName(tab, v);
+        persistChannels();
+      }
+      inp.replaceWith(tab.nameEl);
+    };
+    inp.addEventListener("keydown", (e) => {
+      e.stopPropagation();
+      if (e.key === "Enter") { e.preventDefault(); commit(false); }
+      if (e.key === "Escape") commit(true);
+    });
+    inp.addEventListener("blur", () => commit(false));
+    inp.addEventListener("click", (e) => e.stopPropagation());
+  }
+
+  function closeTab(tab) {
+    // Detach only: the server stops the claude process when no client is
+    // attached to the session anymore (and "End session" stops it
+    // explicitly for everyone).
+    if (tab.ws && tab.ws.readyState === WebSocket.OPEN) tab.ws.close();
+    tab.btnEl.remove();
+    tab.transcriptEl.remove();
+    tabs = tabs.filter((t) => t !== tab);
+    persistChannels();
+    if (active === tab) {
+      if (tabs.length) activate(tabs[tabs.length - 1]);
+      else createTab();
+    }
+  }
+
+  /**
+   * Remembers the open channels (session id, directory, name) so they can
+   * be restored — each session resumed — on the next page load.
+   */
+  function persistChannels() {
+    const list = tabs
+      .filter((t) => t.sessionId)
+      .map((t) => ({
+        sessionId: t.sessionId,
+        cwd: t.cwd && t.cwd.startsWith("/") ? t.cwd : "",
+        name: t.nameEl.textContent,
+      }));
+    localStorage.setItem("cp.channels", JSON.stringify(list));
+  }
+
+  function setTabState(tab, status, text) {
+    tab.status = status;
+    tab.stateText = text;
+    const ledClass = { setup: "", connecting: "busy", ready: "on", busy: "busy", dead: "off" }[status];
+    tab.ledEl.className = "led " + ledClass;
+    if (tab === active) refreshChrome();
+  }
+
+  function activate(tab) {
+    active = tab;
+    tabs.forEach((t) => {
+      t.btnEl.classList.toggle("active", t === tab);
+      t.transcriptEl.hidden = t !== tab;
+    });
+    refreshChrome();
+    if (tab.status !== "setup") {
+      tab.transcriptEl.scrollTop = tab.transcriptEl.scrollHeight;
+      promptInput.focus();
+    }
+  }
+
+  /** Keeps header, setup, composer and engine room in sync with the active channel. */
+  function refreshChrome() {
+    const t = active;
+    $("led").className = "led " +
+      ({ setup: "", connecting: "busy", ready: "on", busy: "busy", dead: "off" }[t.status]);
+    $("state").textContent = t.stateText;
+    $("cwdView").textContent = t.cwd || "—";
+    $("sessionView").textContent = t.sessionId || "—";
+    $("branchGauge").hidden = !t.branch;
+    $("branchView").textContent = t.branch || "—";
+    setup.hidden = t.status !== "setup";
+    composer.hidden = t.status === "setup";
+    sendBtn.disabled = t.status !== "ready" || !!t.pendingChoices;
+    thinking.classList.toggle("visible", t.status === "busy");
+    screenEl.textContent = t.screenText;
+    if (t.status === "setup") {
+      $("cwdInput").value = t.cwd || localStorage.getItem("cp.cwd") || "";
+      const last = localStorage.getItem("cp.session");
+      if (last && !$("resumeInput").value) $("resumeInput").value = last;
+      $("startBtn").disabled = false;
+    }
+  }
+
+  function addTurn(tab, role, who, text, extraClass) {
+    const turn = document.createElement("div");
+    turn.className = "turn " + role + (extraClass ? " " + extraClass : "");
+    if (role !== "system") {
+      const label = document.createElement("span");
+      label.className = "label";
+      label.textContent = who;
+      turn.appendChild(label);
+    }
+    const bubble = document.createElement("div");
+    bubble.className = "bubble";
+    // Claude content (streamed live or replayed history) is raw markdown from
+    // the .jsonl → render to HTML (tables, code, wrapping).
+    if (role === "claude" && (extraClass === "hist" || extraClass === "live") && window.marked) {
+      bubble.classList.add("md");
+      bubble.innerHTML = marked.parse(text);
+    } else {
+      bubble.textContent = text;
+    }
+    turn.appendChild(bubble);
+    tab.transcriptEl.appendChild(turn);
+    if (tab === active) tab.transcriptEl.scrollTop = tab.transcriptEl.scrollHeight;
+    return bubble;
+  }
+
+  /** A compact "used a tool" activity line during streaming. */
+  function addToolLine(tab, name, summary) {
+    const turn = document.createElement("div");
+    turn.className = "turn claude tool-line";
+    const bubble = document.createElement("div");
+    bubble.className = "bubble";
+    bubble.textContent = "→ " + name + (summary ? "  " + summary : "");
+    turn.appendChild(bubble);
+    tab.transcriptEl.appendChild(turn);
+    if (tab === active) tab.transcriptEl.scrollTop = tab.transcriptEl.scrollHeight;
+  }
+
+  /** Tool output (command result / file read), collapsible when long. */
+  function addResult(tab, text, isError) {
+    const turn = document.createElement("div");
+    turn.className = "turn claude result" + (isError ? " err" : "");
+    const pre = document.createElement("pre");
+    pre.className = "bubble result-body";
+    const lines = text.split("\n");
+    const long = lines.length > 12;
+    pre.textContent = long ? lines.slice(0, 12).join("\n") : text;
+    turn.appendChild(pre);
+    if (long) {
+      const more = document.createElement("button");
+      more.className = "result-more";
+      more.textContent = "+ " + (lines.length - 12) + " more lines";
+      let expanded = false;
+      more.addEventListener("click", () => {
+        expanded = !expanded;
+        pre.textContent = expanded ? text : lines.slice(0, 12).join("\n");
+        more.textContent = expanded ? "− collapse" : "+ " + (lines.length - 12) + " more lines";
+      });
+      turn.appendChild(more);
+    }
+    tab.transcriptEl.appendChild(turn);
+    if (tab === active) tab.transcriptEl.scrollTop = tab.transcriptEl.scrollHeight;
+  }
+
+  /**
+   * Renders a TUI dialog clickable in the chat. Single select: one click
+   * validates. Multi-select: clicks toggle checkboxes (the state comes back
+   * from the server and the bubble is re-rendered in place), the Submit
+   * button confirms.
+   */
+  function renderDialog(tab, msg) {
+    let bubble;
+    if (tab.dialogBubble) {
+      bubble = tab.dialogBubble;
+      bubble.textContent = "";
+    } else {
+      const turn = document.createElement("div");
+      turn.className = "turn claude dialog";
+      const label = document.createElement("span");
+      label.className = "label";
+      label.textContent = msg.multi
+        ? "claude — multi-select (check then submit)"
+        : "claude — choice requested";
+      bubble = document.createElement("div");
+      bubble.className = "bubble";
+      turn.append(label, bubble);
+      tab.transcriptEl.appendChild(turn);
+      tab.dialogBubble = bubble;
+    }
+    if (msg.question) {
+      const q = document.createElement("div");
+      q.className = "question";
+      q.textContent = msg.question;
+      bubble.appendChild(q);
+    }
+    const buttons = [];
+    for (const opt of msg.options) {
+      // "Type something" option: free-form text input.
+      if (/^type something/i.test(opt.label)) {
+        const row = document.createElement("div");
+        row.className = "freetext-row";
+        const inp = document.createElement("input");
+        inp.type = "text";
+        inp.placeholder = opt.n + ". Free-form answer…";
+        const go = document.createElement("button");
+        go.type = "button";
+        go.textContent = "Send";
+        const submitFree = () => {
+          const v = inp.value.trim();
+          if (!v || tab.status !== "ready" || !tab.ws) return;
+          buttons.forEach((x) => (x.disabled = true));
+          inp.disabled = true;
+          tab.ws.send(JSON.stringify({ type: "freetext", n: opt.n, text: v }));
+        };
+        go.addEventListener("click", submitFree);
+        inp.addEventListener("keydown", (e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            e.stopPropagation();
+            submitFree();
+          }
+        });
+        buttons.push(go);
+        row.append(inp, go);
+        bubble.appendChild(row);
+        continue;
+      }
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "choice" + (opt.checked ? " checked" : "");
+      const num = document.createElement("span");
+      num.className = "num";
+      num.textContent = msg.multi
+        ? (opt.checked ? "☑ " : "☐ ") + opt.n + "."
+        : opt.n + ".";
+      const lab = document.createElement("span");
+      lab.textContent = opt.label;
+      b.append(num, lab);
+      if (opt.hint) {
+        const h = document.createElement("span");
+        h.className = "hint";
+        h.textContent = opt.hint;
+        b.appendChild(h);
+      }
+      b.addEventListener("click", () => {
+        if (tab.status !== "ready" || !tab.ws) return;
+        if (msg.multi) {
+          // Toggle — the bubble will be re-rendered with the fresh state.
+          buttons.forEach((x) => (x.disabled = true));
+          tab.ws.send(JSON.stringify({ type: "toggle", n: opt.n }));
+        } else {
+          buttons.forEach((x) => (x.disabled = true));
+          b.classList.add("chosen");
+          tab.ws.send(JSON.stringify({ type: "choose", n: opt.n }));
+        }
+      });
+      buttons.push(b);
+      bubble.appendChild(b);
+    }
+    if (msg.multi) {
+      const v = document.createElement("button");
+      v.type = "button";
+      v.className = "primary validate";
+      v.textContent = "Submit selection";
+      v.addEventListener("click", () => {
+        if (tab.status !== "ready" || !tab.ws) return;
+        buttons.forEach((x) => (x.disabled = true));
+        v.disabled = true;
+        tab.ws.send(JSON.stringify({ type: "confirm" }));
+      });
+      buttons.push(v);
+      bubble.appendChild(v);
+    }
+    tab.pendingChoices = buttons;
+    if (tab === active) tab.transcriptEl.scrollTop = tab.transcriptEl.scrollHeight;
+  }
+
+  /** Disables pending choices (resolved elsewhere or stale). */
+  function retireChoices(tab) {
+    (tab.pendingChoices || []).forEach((b) => (b.disabled = true));
+    tab.pendingChoices = null;
+    tab.dialogBubble = null;
+  }
+
+  // ── Link ────────────────────────────────────────────────
+  /** Starts a channel's session (from the form or a restore). */
+  function launchTab(t, msg) {
+    t.cwd = msg.cwd || "(server directory)";
+    if (!t.customName) t.nameEl.textContent = basename(msg.cwd || "") || "channel " + t.id;
+    setTabState(t, "connecting", "connecting…");
+
+    const ws = new WebSocket(`ws://${location.host}/ws`);
+    t.ws = ws;
+    ws.addEventListener("open", () => ws.send(JSON.stringify({ type: "start", ...msg })));
+    ws.addEventListener("close", () => {
+      if (t.status !== "dead") setTabState(t, "dead", "link lost");
+    });
+    ws.addEventListener("message", (ev) => handleMessage(t, JSON.parse(ev.data)));
+  }
+
+  function startActiveTab() {
+    const t = active;
+    if (t.status !== "setup") return;
+    const cwd = $("cwdInput").value.trim();
+    const mode = document.querySelector('input[name="mode"]:checked').value;
+    const msg = { cwd };
+    if (mode === "continue") msg.continue = true;
+    if (mode === "resume") {
+      msg.resume = $("resumeInput").value.trim();
+      if (!msg.resume) return alert("Enter a session id.");
+    }
+    if (mode === "new" && $("worktreeInput").checked) msg.worktree = true;
+    localStorage.setItem("cp.cwd", cwd);
+    $("startBtn").disabled = true;
+    launchTab(t, msg);
+  }
+
+  function handleMessage(t, msg) {
+    switch (msg.type) {
+      case "history":
+        addTurn(t, "system", "", "— resumed session history —");
+        for (const h of msg.turns) {
+          if (h.role === "user") addTurn(t, "user", "pilot", h.text, "hist");
+          else addTurn(t, "claude", "claude", h.text, "hist");
+        }
+        break;
+      case "ready":
+        t.cwd = msg.cwd;
+        t.sessionId = msg.sessionId;
+        t.branch = msg.branch || null;
+        if (t === active) refreshChrome();
+        if (msg.sessionId) {
+          localStorage.setItem("cp.session", msg.sessionId);
+          // Custom name remembered for this session.
+          if (!t.customName && savedNames[msg.sessionId]) {
+            t.customName = true;
+            t.nameEl.textContent = savedNames[msg.sessionId];
+          }
+        }
+        setTabState(t, "ready", "ready");
+        persistChannels();
+        addTurn(t, "system", "", "Session established. The pilot has the controls.");
+        if (t === active) promptInput.focus();
+        break;
+      case "working":
+        // Another client may have resolved the pending dialog.
+        retireChoices(t);
+        setTabState(t, "busy", "responding…");
+        break;
+      case "prompt-echo":
+        // Prompt sent by another tab/interface on the same session.
+        addTurn(t, "user", "pilot (elsewhere)", msg.text);
+        break;
+      case "stream-text":
+        // A complete assistant text block, streamed from the transcript.
+        retireChoices(t);
+        addTurn(t, "claude", "claude", msg.text, "live");
+        break;
+      case "stream-tool":
+        // A tool call, shown as a compact activity line.
+        addToolLine(t, msg.name, msg.summary);
+        break;
+      case "stream-result":
+        // Tool output (command result, file read…).
+        addResult(t, msg.text, msg.isError);
+        break;
+      case "turn-done":
+        retireChoices(t);
+        if (msg.sessionId && msg.sessionId !== t.sessionId) {
+          t.sessionId = msg.sessionId;
+          localStorage.setItem("cp.session", msg.sessionId);
+          persistChannels();
+        }
+        setTabState(t, "ready", "ready");
+        break;
+      case "dialog":
+        // Re-rendered in place when a dialog is already shown (multi toggle).
+        renderDialog(t, msg);
+        setTabState(t, "ready", "choice pending");
+        break;
+      case "screen":
+        t.screenText = msg.text;
+        if (t === active) screenEl.textContent = msg.text;
+        break;
+      case "error":
+        addTurn(t, "system", "", "Error: " + msg.message);
+        if (t.status === "busy") setTabState(t, "ready", "ready");
+        break;
+      case "exited":
+        addTurn(t, "system", "", "The claude process exited (code " + msg.code + ").");
+        setTabState(t, "dead", "session ended");
+        break;
+      case "stopped":
+        addTurn(t, "system", "", "Session closed cleanly.");
+        setTabState(t, "dead", "session ended");
+        break;
+    }
+  }
+
+  // ── Session picker (resume by id) ───────────────────────
+  /** Lists the directory's resumable sessions; a click fills the id field. */
+  async function refreshSessionList() {
+    const listEl = $("sessionList");
+    listEl.innerHTML = '<div class="empty">loading…</div>';
+    let sessions = [];
+    try {
+      const cwd = $("cwdInput").value.trim();
+      const res = await fetch("/sessions?cwd=" + encodeURIComponent(cwd));
+      sessions = await res.json();
+    } catch {
+      /* server unreachable: leave the list empty */
+    }
+    listEl.innerHTML = "";
+    if (!sessions.length) {
+      listEl.innerHTML = '<div class="empty">No sessions found in this directory.</div>';
+      return;
+    }
+    for (const s of sessions) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "session-item";
+      if (s.id === $("resumeInput").value.trim()) b.classList.add("selected");
+      const sid = document.createElement("span");
+      sid.className = "sid";
+      sid.textContent = (savedNames[s.id] ? savedNames[s.id] + " — " : "") + s.id;
+      const meta = document.createElement("span");
+      meta.className = "meta";
+      meta.textContent = new Date(s.mtime).toLocaleString();
+      b.append(sid, meta);
+      if (s.preview) {
+        const p = document.createElement("span");
+        p.className = "preview";
+        p.textContent = s.preview;
+        b.appendChild(p);
+      }
+      b.addEventListener("click", () => {
+        $("resumeInput").value = s.id;
+        listEl.querySelectorAll(".selected").forEach((x) => x.classList.remove("selected"));
+        b.classList.add("selected");
+      });
+      listEl.appendChild(b);
+    }
+  }
+
+  // ── Controls ────────────────────────────────────────────
+  $("startBtn").addEventListener("click", startActiveTab);
+  document.querySelectorAll('input[name="mode"]').forEach((r) =>
+    r.addEventListener("change", () => {
+      const mode = document.querySelector('input[name="mode"]:checked').value;
+      $("resumeField").hidden = mode !== "resume";
+      // Worktree isolation is only meaningful for a brand-new session.
+      $("worktreeField").style.opacity = mode === "new" ? "1" : "0.4";
+      $("worktreeInput").disabled = mode !== "new";
+      if (mode === "resume") refreshSessionList();
+    })
+  );
+  $("cwdInput").addEventListener("change", () => {
+    if (!$("resumeField").hidden) refreshSessionList();
+  });
+
+  composer.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const t = active;
+    const text = promptInput.value.trim();
+    if (!text || t.status !== "ready" || t.pendingChoices || !t.ws) return;
+    addTurn(t, "user", "pilot", text);
+    t.ws.send(JSON.stringify({ type: "prompt", text }));
+    promptInput.value = "";
+    promptInput.style.height = "auto";
+  });
+  promptInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      composer.requestSubmit();
+    }
+  });
+  promptInput.addEventListener("input", () => {
+    promptInput.style.height = "auto";
+    promptInput.style.height = Math.min(promptInput.scrollHeight, 160) + "px";
+  });
+
+  $("toggleMachine").addEventListener("click", () => machine.classList.toggle("open"));
+  $("closeMachine").addEventListener("click", () => machine.classList.remove("open"));
+
+  // ── Diff panel ──────────────────────────────────────────
+  function colorDiff(text) {
+    const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    return text
+      .split("\n")
+      .map((l) => {
+        const e = esc(l);
+        if (/^\+\+\+|^---|^diff |^index /.test(l)) return '<span class="meta">' + e + "</span>";
+        if (/^@@/.test(l)) return '<span class="hunk">' + e + "</span>";
+        if (/^\+/.test(l)) return '<span class="add">' + e + "</span>";
+        if (/^-/.test(l)) return '<span class="del">' + e + "</span>";
+        return e;
+      })
+      .join("\n");
+  }
+  async function loadDiff() {
+    const t = active;
+    if (!t || !t.sessionId) return;
+    $("diffBranch").textContent = t.branch || "working tree";
+    $("diffStatus").textContent = "loading…";
+    $("diffBody").innerHTML = "";
+    try {
+      const d = await (await fetch("/diff?session=" + encodeURIComponent(t.sessionId))).json();
+      $("diffStatus").textContent = d.status || (d.diff ? "" : "no changes");
+      $("diffBody").innerHTML = d.diff ? colorDiff(d.diff) : "";
+    } catch {
+      $("diffStatus").textContent = "diff unavailable";
+    }
+  }
+  $("toggleDiff").addEventListener("click", () => {
+    const open = $("diffpanel").classList.toggle("open");
+    if (open) loadDiff();
+  });
+  $("closeDiff").addEventListener("click", () => $("diffpanel").classList.remove("open"));
+  $("refreshDiff").addEventListener("click", loadDiff);
+  document.querySelectorAll(".keys button[data-key]").forEach((b) =>
+    b.addEventListener("click", () => {
+      if (active.ws) active.ws.send(JSON.stringify({ type: "key", key: b.dataset.key }));
+    })
+  );
+  $("settleBtn").addEventListener("click", () => {
+    if (active.ws && active.status === "ready")
+      active.ws.send(JSON.stringify({ type: "settle" }));
+  });
+  $("stopBtn").addEventListener("click", () => {
+    if (active.ws) active.ws.send(JSON.stringify({ type: "stop" }));
+  });
+  newTabBtn.addEventListener("click", createTab);
+
+  // ── Quota gauges (5h / 7d) ──────────────────────────────
+  function fmtReset(sec) {
+    if (!sec) return "";
+    const d = sec * 1000 - Date.now();
+    if (d <= 0) return "resets now";
+    const h = Math.floor(d / 3600000);
+    const m = Math.floor((d % 3600000) / 60000);
+    return "resets in " + (h ? h + "h" + (m ? m + "m" : "") : m + "m");
+  }
+  function paintGauge(el, w) {
+    const fill = el.querySelector(".fill");
+    const pct = el.querySelector(".qpct");
+    if (!w) { fill.style.width = "0%"; pct.textContent = "—"; el.title = ""; return; }
+    const p = Math.round(w.usedPercentage);
+    fill.style.width = Math.min(100, p) + "%";
+    pct.textContent = p + "%";
+    el.classList.toggle("warn", p >= 70 && p < 90);
+    el.classList.toggle("crit", p >= 90);
+    const base = el.id === "quota5h" ? "5-hour rolling limit" : "7-day rolling limit";
+    el.title = base + " — " + p + "% used · " + fmtReset(w.resetsAt);
+  }
+  async function refreshUsage() {
+    try {
+      const u = await (await fetch("/usage")).json();
+      paintGauge($("quota5h"), u.fiveHour);
+      paintGauge($("quota7d"), u.sevenDay);
+    } catch { /* leave last values */ }
+  }
+  refreshUsage();
+  setInterval(refreshUsage, 60_000);
+
+  // On load: restore the remembered channels by resuming each session (the
+  // server replays the history); otherwise start with a blank channel.
+  const savedChannels = JSON.parse(localStorage.getItem("cp.channels") || "[]");
+  // Deduplicate by session id (data inherited from an old bug where several
+  // channels could converge to the same id).
+  const seenIds = new Set();
+  const uniqueChannels = savedChannels.filter(
+    (s) => s.sessionId && !seenIds.has(s.sessionId) && seenIds.add(s.sessionId),
+  );
+  if (uniqueChannels.length) {
+    for (const s of uniqueChannels) {
+      const t = createTab();
+      if (s.name) {
+        t.customName = true;
+        t.nameEl.textContent = s.name;
+      }
+      launchTab(t, { cwd: s.cwd, resume: s.sessionId });
+    }
+    activate(tabs[0]);
+  } else {
+    createTab();
+  }
+</script>
+</body>
+</html>

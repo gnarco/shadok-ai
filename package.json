@@ -1,0 +1,35 @@
+{
+  "name": "claudepilot",
+  "version": "0.1.0",
+  "main": "dist/session.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "build": "tsc",
+    "dev": "tsx src/cli.ts",
+    "postinstall": "chmod +x node_modules/node-pty/prebuilds/darwin-*/spawn-helper 2>/dev/null || true",
+    "web": "node dist/server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "Drives a Claude Code TUI session through a pseudo-terminal",
+  "type": "module",
+  "dependencies": {
+    "@xterm/headless": "^6.0.0",
+    "express": "^5.2.1",
+    "marked": "^18.0.6",
+    "node-pty": "^1.1.0",
+    "ws": "^8.21.1"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.1.1",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.23.1",
+    "typescript": "^7.0.2"
+  },
+  "types": "dist/session.d.ts",
+  "bin": {
+    "claudepilot": "dist/cli.js"
+  }
+}

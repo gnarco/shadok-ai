@@ -1,0 +1,401 @@
+import { randomUUID } from "node:crypto";
+import http from "node:http";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import express from "express";
+import { WebSocketServer, type WebSocket } from "ws";
+import {
+  detectDialog,
+  findSessionId,
+  listSessions,
+  loadHistory,
+} from "./extract.js";
+import { ClaudePilot } from "./session.js";
+import { sessionFilePath, tailSession } from "./tail.js";
+import { getUsage } from "./usage.js";
+import {
+  createWorktree,
+  gitDiff,
+  isGitRepo,
+  removeWorktreeIfClean,
+  type Worktree,
+} from "./worktree.js";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const PORT = Number(process.env.PORT ?? 3789);
+
+const app = express();
+app.use(express.static(path.join(__dirname, "..", "public")));
+// Markdown parser served locally (history rendering on the client).
+app.get("/vendor/marked.js", (_req, res) =>
+  res.sendFile(path.join(__dirname, "..", "node_modules", "marked", "lib", "marked.umd.js")),
+);
+// Resumable sessions of a directory (for the "resume by id" picker).
+app.get("/sessions", (req, res) => {
+  const cwd = String(req.query.cwd ?? "").trim() || process.cwd();
+  res.json(listSessions(cwd));
+});
+// Current 5-hour and 7-day subscription usage (for the quota gauges).
+app.get("/usage", async (_req, res) => {
+  res.json((await getUsage()) ?? { fiveHour: null, sevenDay: null, fetchedAt: Date.now() });
+});
+// Changes made by a session (git status + diff), for the review panel.
+app.get("/diff", (req, res) => {
+  const s = sessions.get(String(req.query.session ?? ""));
+  if (!s) return res.json({ status: "", diff: "", branch: null, error: "no such session" });
+  res.json(gitDiff(s.cwd, s.worktree?.baseSha ?? null));
+});
+
+const server = http.createServer(app);
+const wss = new WebSocketServer({ server, path: "/ws" });
+
+type ClientMessage =
+  | { type: "start"; cwd?: string; resume?: string; continue?: boolean; worktree?: boolean }
+  | { type: "prompt"; text: string }
+  | { type: "choose"; n: number }
+  | { type: "toggle"; n: number }
+  | { type: "confirm" }
+  | { type: "freetext"; n: number; text: string }
+  | { type: "key"; key: string }
+  | { type: "settle" }
+  | { type: "stop" };
+
+/**
+ * A piloted session = ONE claude process, shared by N WebSocket clients.
+ * Every event (prompts, answers, dialogs, screen) is broadcast to all
+ * attached clients — several tabs or interfaces can follow the same
+ * session live.
+ */
+interface Live {
+  id: string;
+  cwd: string;
+  pilot: ClaudePilot;
+  clients: Set<WebSocket>;
+  busy: boolean;
+  lastPrompt: string;
+  screenTimer: ReturnType<typeof setInterval> | null;
+  lastScreen: string;
+  /** Stops the .jsonl tail loop (content streaming). */
+  stopTail: (() => void) | null;
+  /** Isolated git worktree, when the session runs in one. */
+  worktree: Worktree | null;
+}
+
+const sessions = new Map<string, Live>();
+
+function broadcast(s: Live, msg: object, except?: WebSocket) {
+  const data = JSON.stringify(msg);
+  for (const c of s.clients) {
+    if (c !== except && c.readyState === c.OPEN) c.send(data);
+  }
+}
+
+function destroySession(s: Live) {
+  if (s.screenTimer) clearInterval(s.screenTimer);
+  s.screenTimer = null;
+  s.stopTail?.();
+  s.stopTail = null;
+  s.pilot.kill();
+  // Reclaim the worktree only if the agent left it clean; dirty ones are
+  // kept so the user can inspect/merge the changes.
+  if (s.worktree) removeWorktreeIfClean(s.worktree);
+  sessions.delete(s.id);
+}
+
+function detach(ws: WebSocket, s: Live) {
+  s.clients.delete(ws);
+  // Last client gone: stop the process (the session stays resumable from
+  // its .jsonl file).
+  if (s.clients.size === 0) destroySession(s);
+}
+
+async function createSession(
+  id: string,
+  cwd: string,
+  args: string[],
+  worktree: Worktree | null = null,
+): Promise<Live> {
+  const pilot = new ClaudePilot({ cwd, args });
+  const s: Live = {
+    id,
+    cwd,
+    pilot,
+    clients: new Set(),
+    busy: false,
+    lastPrompt: "",
+    screenTimer: null,
+    lastScreen: "",
+    stopTail: null,
+    worktree,
+  };
+  pilot.onExit((code) => {
+    broadcast(s, { type: "exited", code });
+    destroySession(s);
+  });
+  pilot.start();
+  // Stream authoritative content from the session transcript: each assistant
+  // text/tool block is broadcast as soon as Claude Code writes it — complete,
+  // never truncated, at message granularity.
+  s.stopTail = tailSession(sessionFilePath(cwd, id), (e) => {
+    if (e.kind === "text") broadcast(s, { type: "stream-text", text: e.text });
+    else if (e.kind === "tool") broadcast(s, { type: "stream-tool", name: e.name, summary: e.summary });
+    else broadcast(s, { type: "stream-result", text: e.text, isError: e.isError });
+  });
+  s.screenTimer = setInterval(() => {
+    if (pilot.hasExited) return;
+    const scr = pilot.screen();
+    if (scr !== s.lastScreen) {
+      s.lastScreen = scr;
+      broadcast(s, { type: "screen", text: scr, working: pilot.isWorking() });
+    }
+  }, 300);
+
+  let screen = await pilot.waitForIdle({ stableMs: 1200, timeoutMs: 60_000 });
+  if (/do you trust the files/i.test(screen)) {
+    pilot.press("enter");
+    screen = await pilot.waitForIdle({ stableMs: 1200, timeoutMs: 30_000 });
+  }
+  sessions.set(id, s);
+  return s;
+}
+
+/**
+ * Waits for the current turn to finish and broadcasts the outcome. Content is
+ * streamed separately by the transcript tail; here we only signal an
+ * interactive dialog (turn stays suspended) or turn completion.
+ */
+async function finishTurn(s: Live) {
+  s.busy = true;
+  broadcast(s, { type: "working" });
+  try {
+    await s.pilot.waitForIdle({ stableMs: 2000, timeoutMs: 900_000 });
+    const dialog = detectDialog(s.pilot.screen());
+    if (dialog) broadcast(s, { type: "dialog", ...dialog });
+    else broadcast(s, { type: "turn-done", sessionId: s.id });
+  } finally {
+    s.busy = false;
+  }
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+wss.on("connection", (ws: WebSocket) => {
+  let session: Live | null = null;
+
+  const send = (msg: object) => {
+    if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg));
+  };
+  const fail = (message: string) => send({ type: "error", message });
+
+  ws.on("close", () => {
+    if (session) detach(ws, session);
+    session = null;
+  });
+
+  ws.on("message", async (raw) => {
+    let msg: ClientMessage;
+    try {
+      msg = JSON.parse(String(raw));
+    } catch {
+      return fail("unreadable message");
+    }
+
+    try {
+      switch (msg.type) {
+        case "start": {
+          if (session) return fail("session already started");
+          const cwd = msg.cwd?.trim() || process.cwd();
+          // Deterministic id: enforced with --session-id for a new session,
+          // known for a resume. NEVER derive it from the most recent file
+          // in the directory — with several channels in the same directory
+          // they would all converge to the same session.
+          let id: string;
+          const args: string[] = [];
+          let resumed = false;
+          if (msg.resume) {
+            id = msg.resume;
+            args.push("--resume", id);
+            resumed = true;
+          } else if (msg.continue) {
+            const found = findSessionId(cwd);
+            if (found) {
+              id = found;
+              args.push("--resume", id);
+              resumed = true;
+            } else {
+              // Nothing to resume in this directory: new session.
+              id = randomUUID();
+              args.push("--session-id", id);
+            }
+          } else {
+            id = randomUUID();
+            args.push("--session-id", id);
+          }
+
+          // Isolation: run a NEW session inside a fresh git worktree so the
+          // agent's edits stay contained until the user merges them.
+          let worktree: Worktree | null = null;
+          let effectiveCwd = cwd;
+          if (msg.worktree && !resumed && isGitRepo(cwd)) {
+            try {
+              worktree = createWorktree(cwd, id.slice(0, 8));
+              effectiveCwd = worktree.path;
+            } catch (e) {
+              return fail(
+                "worktree creation failed: " + (e instanceof Error ? e.message : String(e)),
+              );
+            }
+          }
+
+          const existing = sessions.get(id);
+          if (existing && !existing.pilot.hasExited) {
+            // Session already piloted: attach to it (shared process).
+            session = existing;
+            session.clients.add(ws);
+            const turns = loadHistory(session.cwd, id);
+            if (turns.length) send({ type: "history", turns });
+            send({ type: "ready", sessionId: id, cwd: session.cwd });
+            send({
+              type: "screen",
+              text: session.pilot.screen(),
+              working: session.pilot.isWorking(),
+            });
+            if (session.busy) send({ type: "working" });
+            break;
+          }
+
+          session = await createSession(id, effectiveCwd, args, worktree);
+          session.clients.add(ws);
+          if (resumed) {
+            const turns = loadHistory(effectiveCwd, id);
+            if (turns.length) send({ type: "history", turns });
+          }
+          send({
+            type: "ready",
+            sessionId: id,
+            cwd: effectiveCwd,
+            branch: worktree?.branch ?? null,
+          });
+          break;
+        }
+
+        case "prompt": {
+          if (!session) return fail("no session started");
+          if (session.busy) return fail("a response is already in progress");
+          const text = msg.text.trim();
+          if (!text) return;
+          session.lastPrompt = text;
+          // The session's other clients see the prompt arrive.
+          broadcast(session, { type: "prompt-echo", text }, ws);
+          session.busy = true;
+          broadcast(session, { type: "working" });
+          try {
+            await session.pilot.submit(text);
+          } finally {
+            session.busy = false;
+          }
+          await finishTurn(session);
+          break;
+        }
+
+        case "choose": {
+          // Single select: the digit selects and validates.
+          if (!session) return fail("no session started");
+          if (session.busy) return fail("a response is already in progress");
+          session.pilot.write(String(msg.n));
+          await sleep(800);
+          await finishTurn(session);
+          break;
+        }
+
+        case "toggle": {
+          // Multi-select: toggle the checkbox then rebroadcast the state.
+          if (!session) return fail("no session started");
+          if (session.busy) return fail("a response is already in progress");
+          session.pilot.write(String(msg.n));
+          await sleep(500);
+          const d = detectDialog(session.pilot.screen());
+          if (d) broadcast(session, { type: "dialog", ...d });
+          else await finishTurn(session);
+          break;
+        }
+
+        case "freetext": {
+          // "Type something" option: digit → paste the text → Enter.
+          if (!session) return fail("no session started");
+          if (session.busy) return fail("a response is already in progress");
+          const t = msg.text.trim();
+          if (!t) return;
+          session.pilot.write(String(msg.n));
+          await sleep(700);
+          session.pilot.write(`\x1b[200~${t}\x1b[201~`);
+          await sleep(400);
+          session.pilot.press("enter");
+          await sleep(600);
+          const d = detectDialog(session.pilot.screen());
+          if (d) broadcast(session, { type: "dialog", ...d });
+          else await finishTurn(session);
+          break;
+        }
+
+        case "confirm": {
+          // Multi-select: Tab → "Submit answers" page → Enter.
+          if (!session) return fail("no session started");
+          if (session.busy) return fail("a response is already in progress");
+          session.pilot.press("tab");
+          await sleep(600);
+          session.pilot.press("enter");
+          await sleep(400);
+          await finishTurn(session);
+          break;
+        }
+
+        case "key": {
+          // Manual keystroke from the terminal view (dialogs, menus…).
+          if (!session) return fail("no session started");
+          const named = [
+            "enter",
+            "escape",
+            "up",
+            "down",
+            "left",
+            "right",
+            "tab",
+            "ctrl-c",
+          ] as const;
+          if ((named as readonly string[]).includes(msg.key)) {
+            session.pilot.press(msg.key as (typeof named)[number]);
+          } else if (msg.key.length === 1) {
+            session.pilot.write(msg.key);
+          }
+          break;
+        }
+
+        case "settle": {
+          // After a manual intervention: wait for the turn to finish.
+          if (!session || session.busy) return;
+          await finishTurn(session);
+          break;
+        }
+
+        case "stop": {
+          // Explicit stop: ends the session for ALL clients.
+          if (!session) return;
+          const s = session;
+          broadcast(s, { type: "stopped" });
+          await s.pilot.stop();
+          destroySession(s);
+          session = null;
+          break;
+        }
+      }
+    } catch (err) {
+      if (session) session.busy = false;
+      fail(err instanceof Error ? err.message : String(err));
+    }
+  });
+});
+
+server.listen(PORT, () => {
+  console.log(`claudepilot web: http://localhost:${PORT}`);
+});
