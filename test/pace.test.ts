@@ -61,6 +61,48 @@ test("fenêtre expirée : le rythme idéal est borné à 100%", () => {
   assert.equal(round(p.ratioPct), 48);
 });
 
+// Borne basse : un resetsAt plus lointain que la durée de la fenêtre elle-même
+// (dérive d'horloge, ou un reset annoncé à +6h sur une fenêtre de 5h) donne un
+// temps écoulé négatif. Sans le clamp, idealPacePct serait négatif et le
+// dénominateur (idealPacePct + 5) pourrait s'annuler ou changer de signe.
+// remaining = 21 600 s > 18 000 s ⇒ (18000 − 21600)/18000 × 100 = −20 → 0.
+// ratio = 50 / (0 + 5) × 100 = 1000.
+test("resetsAt au-delà de la durée de la fenêtre : le rythme idéal est borné à 0%", () => {
+  const p = computePace(win(50, WINDOW_SEC.fiveHour + 3_600), WINDOW_SEC.fiveHour, NOW);
+  assert.equal(p.idealPacePct, 0);
+  assert.equal(p.ratioPct, 1000);
+});
+
+// Frontière exacte du seuil unique (BLOCK_RATIO = 100), posée par arithmétique
+// et non par arrondi, pour qu'une régression `<` ↔ `<=` fasse tomber le test.
+//
+//   remaining = 9 000 s sur une fenêtre de 18 000 s
+//   idealPacePct = (18000 − 9000) / 18000 × 100 = 50          (exact en binaire)
+//   ratioPct     = used / (50 + 5) × 100
+//   ratio = 100  ⟺  used = 55                                  (55/55 = 1, exact)
+//
+// 55 % ⇒ ratio exactement 100 : la comparaison est `ratioPct <= 100 → continue`,
+// donc pile sur la limite ne bloque pas. 56 % ⇒ ratio ≈ 101,8 : bloque.
+test("computePace : 55% à mi-fenêtre donne un ratio de 100 pile", () => {
+  const p = computePace(win(55, WINDOW_SEC.fiveHour / 2), WINDOW_SEC.fiveHour, NOW);
+  assert.equal(p.idealPacePct, 50);
+  assert.equal(p.ratioPct, 100); // égalité stricte, pas d'arrondi
+});
+
+test("paceBlock : un ratio de 100 pile ne bloque pas", () => {
+  const v = paceBlock(usage(win(55, WINDOW_SEC.fiveHour / 2), null), NOW);
+  assert.equal(v.blocked, false);
+  assert.equal(v.reason, null);
+});
+
+test("paceBlock : juste au-dessus de 100 bloque", () => {
+  const w = win(56, WINDOW_SEC.fiveHour / 2);
+  assert.ok(computePace(w, WINDOW_SEC.fiveHour, NOW).ratioPct! > 100);
+  const v = paceBlock(usage(w, null), NOW);
+  assert.equal(v.blocked, true);
+  assert.match(v.reason ?? "", /^5h:/);
+});
+
 test("paceBlock : une seule fenêtre au-dessus du seuil suffit", () => {
   const v = paceBlock(usage(win(90, 600), win(55, 6 * 86_400)), NOW);
   assert.equal(v.blocked, true);
