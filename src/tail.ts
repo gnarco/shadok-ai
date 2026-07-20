@@ -2,11 +2,20 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+/** Token counts of one assistant API message (`message.usage` in the .jsonl). */
+export interface TokenUsage {
+  input: number;
+  output: number;
+  cacheCreation: number;
+  cacheRead: number;
+}
+
 /** A streamed piece of an assistant turn, read from the session .jsonl. */
 export type TailEvent =
   | { kind: "text"; text: string }
   | { kind: "tool"; name: string; summary: string }
-  | { kind: "result"; text: string; isError: boolean };
+  | { kind: "result"; text: string; isError: boolean }
+  | { kind: "usage"; messageId: string; usage: TokenUsage };
 
 /** Max characters of a tool result to stream (long outputs are truncated). */
 const MAX_RESULT = 4000;
@@ -105,6 +114,8 @@ function emitLine(line: string, onEvent: (e: TailEvent) => void) {
   if (e.isMeta || !Array.isArray(e.message?.content)) return;
 
   if (e.type === "assistant") {
+    const usage = parseUsage(e.message);
+    if (usage) onEvent({ kind: "usage", messageId: e.message.id ?? e.uuid, usage });
     for (const block of e.message.content) {
       if (block?.type === "text" && typeof block.text === "string" && block.text.trim()) {
         onEvent({ kind: "text", text: block.text });
@@ -122,6 +133,45 @@ function emitLine(line: string, onEvent: (e: TailEvent) => void) {
       if (text) onEvent({ kind: "result", text, isError: !!block.is_error });
     }
   }
+}
+
+function parseUsage(message: any): TokenUsage | null {
+  const u = message?.usage;
+  if (!u || typeof u !== "object") return null;
+  return {
+    input: u.input_tokens ?? 0,
+    output: u.output_tokens ?? 0,
+    cacheCreation: u.cache_creation_input_tokens ?? 0,
+    cacheRead: u.cache_read_input_tokens ?? 0,
+  };
+}
+
+/**
+ * Sums the token usage already written to a transcript, keyed by message id.
+ * Streaming writes several records per message with the same id and growing
+ * counts — keeping the last record per id yields each message's final usage.
+ */
+export function scanUsage(file: string): Map<string, TokenUsage> {
+  const map = new Map<string, TokenUsage>();
+  let raw: string;
+  try {
+    raw = fs.readFileSync(file, "utf8");
+  } catch {
+    return map; // new session: nothing written yet
+  }
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
+    let e: any;
+    try {
+      e = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (e.type !== "assistant") continue;
+    const usage = parseUsage(e.message);
+    if (usage) map.set(e.message.id ?? e.uuid, usage);
+  }
+  return map;
 }
 
 /** Flattens a tool_result's content (string or block array) to display text. */

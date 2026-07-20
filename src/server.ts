@@ -11,7 +11,7 @@ import {
   loadHistory,
 } from "./extract.js";
 import { ClaudePilot } from "./session.js";
-import { sessionFilePath, tailSession } from "./tail.js";
+import { scanUsage, sessionFilePath, tailSession, type TokenUsage } from "./tail.js";
 import { getUsage } from "./usage.js";
 import {
   createWorktree,
@@ -79,6 +79,20 @@ interface Live {
   stopTail: (() => void) | null;
   /** Isolated git worktree, when the session runs in one. */
   worktree: Worktree | null;
+  /** Token usage per assistant message id (final counts win), from the .jsonl. */
+  usage: Map<string, TokenUsage>;
+}
+
+/** Session-wide token totals, for the window-title counter. */
+function tokenTotals(s: Live) {
+  const t = { input: 0, output: 0, cacheCreation: 0, cacheRead: 0 };
+  for (const u of s.usage.values()) {
+    t.input += u.input;
+    t.output += u.output;
+    t.cacheCreation += u.cacheCreation;
+    t.cacheRead += u.cacheRead;
+  }
+  return t;
 }
 
 const sessions = new Map<string, Live>();
@@ -127,6 +141,8 @@ async function createSession(
     lastScreen: "",
     stopTail: null,
     worktree,
+    // Resumed sessions start with what the transcript already consumed.
+    usage: scanUsage(sessionFilePath(cwd, id)),
   };
   pilot.onExit((code) => {
     broadcast(s, { type: "exited", code });
@@ -139,7 +155,10 @@ async function createSession(
   s.stopTail = tailSession(sessionFilePath(cwd, id), (e) => {
     if (e.kind === "text") broadcast(s, { type: "stream-text", text: e.text });
     else if (e.kind === "tool") broadcast(s, { type: "stream-tool", name: e.name, summary: e.summary });
-    else broadcast(s, { type: "stream-result", text: e.text, isError: e.isError });
+    else if (e.kind === "usage") {
+      s.usage.set(e.messageId, e.usage);
+      broadcast(s, { type: "tokens", tokens: tokenTotals(s) });
+    } else broadcast(s, { type: "stream-result", text: e.text, isError: e.isError });
   });
   s.screenTimer = setInterval(() => {
     if (pilot.hasExited) return;
@@ -255,6 +274,7 @@ wss.on("connection", (ws: WebSocket) => {
             const turns = loadHistory(session.cwd, id);
             if (turns.length) send({ type: "history", turns });
             send({ type: "ready", sessionId: id, cwd: session.cwd });
+            send({ type: "tokens", tokens: tokenTotals(session) });
             send({
               type: "screen",
               text: session.pilot.screen(),
@@ -276,6 +296,7 @@ wss.on("connection", (ws: WebSocket) => {
             cwd: effectiveCwd,
             branch: worktree?.branch ?? null,
           });
+          send({ type: "tokens", tokens: tokenTotals(session) });
           break;
         }
 

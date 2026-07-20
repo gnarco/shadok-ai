@@ -728,6 +728,7 @@
       ws: null,
       cwd: "",
       sessionId: null,
+      tokens: null,
       screenText: "",
       transcriptEl: el,
       btnEl: btn, ledEl: led, nameEl: name,
@@ -793,6 +794,7 @@
     tab.transcriptEl.remove();
     tabs = tabs.filter((t) => t !== tab);
     persistChannels();
+    refreshTitle();
     if (active === tab) {
       if (tabs.length) activate(tabs[tabs.length - 1]);
       else createTab();
@@ -833,6 +835,28 @@
       tab.transcriptEl.scrollTop = tab.transcriptEl.scrollHeight;
       promptInput.focus();
     }
+  }
+
+  // ── Window title: tokens consumed ───────────────────────
+  const BASE_TITLE = document.title;
+
+  function fmtTokens(n) {
+    if (n >= 1e6) return (n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + "M";
+    if (n >= 1e3) return (n / 1e3).toFixed(n >= 1e4 ? 0 : 1) + "k";
+    return String(n);
+  }
+
+  /**
+   * Shows the tokens consumed by the open channels in the tab title.
+   * Counts fresh input + cache writes + output; cache READS are excluded —
+   * they re-bill the whole context on every turn and would drown the number.
+   */
+  function refreshTitle() {
+    let sum = 0;
+    for (const t of tabs) {
+      if (t.tokens) sum += t.tokens.input + t.tokens.cacheCreation + t.tokens.output;
+    }
+    document.title = sum ? fmtTokens(sum) + " tok — claudepilot" : BASE_TITLE;
   }
 
   /** Keeps header, setup, composer and engine room in sync with the active channel. */
@@ -1109,6 +1133,10 @@
       case "prompt-echo":
         // Prompt sent by another tab/interface on the same session.
         addTurn(t, "user", "pilot (elsewhere)", msg.text);
+        break;
+      case "tokens":
+        t.tokens = msg.tokens;
+        refreshTitle();
         break;
       case "stream-text":
         // A complete assistant text block, streamed from the transcript.
