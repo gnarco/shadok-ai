@@ -81,13 +81,15 @@
   @keyframes breathe { 50% { opacity: 0.35; } }
   @media (prefers-reduced-motion: reduce) { .led.busy { animation: none; } }
   header .spacer { flex: 1; }
-  /* Quota gauges (5h / 7d subscription usage) */
+  /* Quota gauges (5h / 7d subscription usage).
+     Two stacked bars: what has been spent, and how much of the window has
+     elapsed. Top bar longer than the bottom one = spending faster than time. */
   .quota { min-width: 92px; }
   .quota .meter {
-    height: 6px;
+    height: 3px;
     background: var(--bg-inset);
     border: 1px solid var(--line);
-    border-radius: 3px;
+    border-radius: 2px;
     overflow: hidden;
     margin: 1px 0;
   }
@@ -98,8 +100,11 @@
     background: var(--ok);
     transition: width 0.4s ease;
   }
-  .quota.warn .fill { background: var(--amber); }
-  .quota.crit .fill { background: var(--err); }
+  /* The pace bar is a reference, not a status: it never takes the alert colour. */
+  .quota .meter.pace .fill { background: var(--text-dim); }
+  /* Colour follows the RATIO, not the raw usage. */
+  .quota.warn .meter.usage .fill { background: var(--amber); }
+  .quota.crit .meter.usage .fill { background: var(--err); }
   .quota .qpct {
     font-family: var(--mono);
     font-size: 11px;
@@ -554,6 +559,9 @@
   .choice .num { color: var(--amber); font-family: var(--mono); font-size: 12px; }
   .choice .hint { color: var(--text-dim); font-size: 12.5px; }
   .choice:disabled { opacity: 0.45; }
+  /* A pace bubble superseded by a newer one, or already acted on. */
+  .turn.dialog.spent .bubble { border-color: var(--line); opacity: 0.5; }
+  .turn.dialog.spent .label { text-decoration: line-through; }
   .choice.chosen { border-color: var(--amber); color: var(--amber); opacity: 1; }
   .choice.checked { border-color: var(--amber); }
   .choice.checked .num { color: var(--amber); }
@@ -747,12 +755,14 @@
   <span class="spacer"></span>
   <div class="gauge quota" id="quota5h" title="5-hour rolling limit">
     <span class="label">5h</span>
-    <div class="meter"><span class="fill"></span></div>
+    <div class="meter usage"><span class="fill"></span></div>
+    <div class="meter pace"><span class="fill"></span></div>
     <span class="qpct">—</span>
   </div>
   <div class="gauge quota" id="quota7d" title="7-day rolling limit">
     <span class="label">7d</span>
-    <div class="meter"><span class="fill"></span></div>
+    <div class="meter usage"><span class="fill"></span></div>
+    <div class="meter pace"><span class="fill"></span></div>
     <span class="qpct">—</span>
   </div>
   <button id="toggleDiff">Diff</button>
@@ -1192,7 +1202,18 @@
     if (dragTabEl || dragGroupEl) e.preventDefault();
   });
 
+  /** State line shown while the auto-continue waits for the pace to recover. */
+  const PACE_HOLD_STATE = "waiting on pace";
+
   function setTabState(tab, status, text) {
+    // A pause of the auto-continue can end without a "pace-resumed": a takeover
+    // cancels the pending retry ("auto-retry-cancelled"), and the parked
+    // callback stands down silently when the turn started on its own
+    // ("working") or the session died ("exited"/"stopped"/"gone"). Every one of
+    // those paths sets the tab state, so hanging the pause indication on the
+    // state line — and dropping it here on any other transition — is what keeps
+    // it from being orphaned. No extra server message, no polling.
+    if (tab.paceHeld && text !== PACE_HOLD_STATE) tab.paceHeld = false;
     tab.status = status;
     tab.stateText = text;
     const ledClass = { setup: "", connecting: "busy", ready: "on", busy: "busy", dead: "off" }[status];
@@ -1802,6 +1823,10 @@
             }
           }
         }
+        // launchTab reuses the tab object, so a bubble armed before the session
+        // ended would come back to life against the *new* session and resend
+        // yesterday's text forced. A new session answers no old question.
+        retirePaceConfirm(t);
         setTabState(t, "ready", "ready");
         persistChannels();
         // Reattaching between turns: restore the last turn's time rather than
@@ -1909,6 +1934,11 @@
         setTabState(t, "ready", "auto-retry in " + Math.round(msg.delayMs / 1000) + " s");
         break;
       case "auto-retry-cancelled":
+        // A takeover ends a parked auto-continue too, and no "pace-resumed"
+        // follows — say so rather than leaving the pause line hanging.
+        if (t.paceHeld) {
+          addTurn(t, "system", "", "Auto-continue cancelled — back to manual.");
+        }
         setTabState(t, "ready", "ready");
         break;
       case "auto-retry-gave-up":
@@ -1916,6 +1946,53 @@
           "Transient API error persists after " + msg.attempts +
           " auto-retries — send a prompt to retry manually.");
         setTabMood(t, "needs-answer");
+        break;
+      case "pace-blocked":
+        // The client's own check was stale: roll back the optimistic turn state,
+        // then ask. The refusal lands *before* any "working" — the server checks
+        // the pace before it marks the session busy — so the tab is still
+        // "ready" here and what needs undoing is exactly what submitPrompt
+        // rendered ahead of the server: the turn timer and the working mood.
+        // "ready" is therefore the *only* state this rollback may undo —
+        // submitPrompt starts the timer and sets the mood but never touches the
+        // tab state. Guarding on "!== busy" would also catch "dead": if the
+        // pilot exits while the server awaits getUsage(), "exited" marks the tab
+        // dead and this refusal would resurrect it as ready with a green LED,
+        // with no later message to correct it.
+        const rollback = t.status === "ready";
+        if (rollback) {
+          stopTurnTimer(t);
+          // Nothing here should overwrite a live state line: a parked
+          // auto-continue ("waiting on pace") and a pending auto-retry
+          // ("auto-retry in N s") both outlive the refusal. submitPrompt never
+          // changed the text, so re-asserting the current one is the rollback.
+          setTabState(t, "ready", t.stateText);
+        }
+        paceBlocked = true;
+        if (msg.reason) paceReason = msg.reason;
+        renderPaceConfirm(t, msg.text, msg.reason);
+        // After the render: retiring the superseded bubble drops the highlight,
+        // so the new one has to re-raise it. A refusal is a question — when the
+        // user has moved to another channel the bubble lands in a hidden
+        // transcript, so flag it the way auto-retry-gave-up flags a channel
+        // waiting on the user.
+        // The highlight is not part of the rollback: it belongs to the new
+        // bubble. A channel that died between two refusals takes the `rollback
+        // === false` path, and gating on it there left an armed bubble in a
+        // hidden transcript with nothing pointing at it.
+        if (t !== active) setTabMood(t, "needs-answer");
+        else if (rollback) setTabMood(t, null);
+        break;
+      case "pace-hold":
+        addTurn(t, "system", "",
+          "Auto-continue paused — " + (msg.reason || "pace exceeded") +
+          ". Resumes automatically once back under the threshold.");
+        setTabState(t, "ready", PACE_HOLD_STATE);
+        t.paceHeld = true;
+        break;
+      case "pace-resumed":
+        addTurn(t, "system", "", "Pace back under the threshold — auto-continue resumed.");
+        setTabState(t, "ready", "ready");
         break;
     }
   }
@@ -1987,19 +2064,97 @@
     if (active && active.status === "setup") refreshLiveList();
   }, 5000);
 
+  function submitPrompt(t, text, force) {
+    // Any outstanding pace question is answered by the fact that something is
+    // being sent — whether by clicking its own button or by a fresh submit.
+    retirePaceConfirm(t);
+    closeActivity(t);
+    addTurn(t, "user", "pilot", text);
+    startTurnTimer(t);
+    setTabMood(t, "working");
+    t.ws.send(JSON.stringify({ type: "prompt", text, ...(force ? { force: true } : {}) }));
+    // The composer is shared and shows the active channel's draft. A forced send
+    // can come from a bubble in a channel the user has since left, and clearing
+    // it then would throw away whatever they are typing in the channel they are
+    // actually looking at.
+    if (t === active) {
+      promptInput.value = "";
+      promptInput.style.height = "auto";
+    }
+    dropDraft(t);
+  }
+
+  /**
+   * Stands the channel's pace question down: its button goes dead and the
+   * bubble is struck through, so the thread still shows the question was asked
+   * without leaving it answerable. Kept in tab.paceBubble — a field of its own,
+   * never tab.dialogBubble, which renderDialog re-renders TUI dialogs through.
+   */
+  function retirePaceConfirm(tab) {
+    const live = tab.paceBubble;
+    if (!live) return;
+    live.btn.disabled = true;
+    live.turn.classList.add("spent");
+    tab.paceBubble = null;
+    // Mirrors retireChoices, but must not steal the highlight of a real TUI
+    // dialog that is still waiting for an answer.
+    if (!tab.pendingChoices && tab.btnEl.classList.contains("needs-answer")) {
+      setTabMood(tab, null);
+    }
+  }
+
+  /**
+   * Above the ideal pace, ask before spending. Rendered in the thread like a TUI
+   * question rather than as a modal — the codebase has no floating dialog.
+   * Each blocked send asks again: forcing covers one message, never a session.
+   * Deliberately does NOT touch tab.dialogBubble or tab.pendingChoices: those
+   * belong to renderDialog, and borrowing them would corrupt a real TUI dialog
+   * and lock the composer.
+   */
+  function renderPaceConfirm(tab, text, reason) {
+    // At most one armed bubble per channel. Without this, a stale bubble stays
+    // clickable forever (clicking yesterday's resends yesterday's text forced),
+    // and two refusals then two quick clicks both clear the "ready" guard —
+    // the tab only turns busy when the server's "working" comes back — so two
+    // forced prompts leave, the second dying as "already in progress".
+    retirePaceConfirm(tab);
+    const turn = document.createElement("div");
+    turn.className = "turn claude dialog";
+    const label = document.createElement("span");
+    label.className = "label";
+    label.textContent = "claudepilot — pace exceeded";
+    const bubble = document.createElement("div");
+    bubble.className = "bubble";
+    const q = document.createElement("div");
+    q.className = "question";
+    q.textContent = (reason || "Consumption above the ideal pace")
+      + " — send anyway?";
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "choice";
+    btn.textContent = "Force send";
+    btn.addEventListener("click", () => {
+      if (tab.status !== "ready" || !tab.ws) return;
+      // submitPrompt retires this bubble (disabling the button, marking it
+      // spent) — the single-live-bubble rule covers the click too.
+      submitPrompt(tab, text, true);
+    });
+    bubble.append(q, btn);
+    turn.append(label, bubble);
+    tab.transcriptEl.appendChild(turn);
+    tab.paceBubble = { turn, btn };
+    if (tab === active) tab.transcriptEl.scrollTop = tab.transcriptEl.scrollHeight;
+  }
+
   composer.addEventListener("submit", (e) => {
     e.preventDefault();
     const t = active;
     const text = promptInput.value.trim();
     if (!text || t.status !== "ready" || t.pendingChoices || !t.ws) return;
-    closeActivity(t);
-    addTurn(t, "user", "pilot", text);
-    startTurnTimer(t);
-    setTabMood(t, "working");
-    t.ws.send(JSON.stringify({ type: "prompt", text }));
-    promptInput.value = "";
-    promptInput.style.height = "auto";
-    dropDraft(t);
+    // Checked here so nothing is optimistically rendered before the server
+    // refuses. The server re-checks anyway — it is the authority.
+    if (paceBlocked) return renderPaceConfirm(t, text, paceReason);
+    submitPrompt(t, text);
   });
   promptInput.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -2082,24 +2237,55 @@
     const m = Math.floor((d % 3600000) / 60000);
     return "resets in " + (h ? h + "h" + (m ? m + "m" : "") : m + "m");
   }
+  /** Last verdict from /usage — read by the composer before sending. */
+  let paceBlocked = false, paceReason = null;
+
   function paintGauge(el, w) {
-    const fill = el.querySelector(".fill");
+    const uFill = el.querySelector(".meter.usage .fill");
+    const pFill = el.querySelector(".meter.pace .fill");
     const pct = el.querySelector(".qpct");
-    if (!w) { fill.style.width = "0%"; pct.textContent = "—"; el.title = ""; return; }
-    const p = Math.round(w.usedPercentage);
-    fill.style.width = Math.min(100, p) + "%";
-    pct.textContent = p + "%";
-    el.classList.toggle("warn", p >= 70 && p < 90);
-    el.classList.toggle("crit", p >= 90);
     const base = el.id === "quota5h" ? "5-hour rolling limit" : "7-day rolling limit";
-    el.title = base + " — " + p + "% used · " + fmtReset(w.resetsAt);
+    if (!w) {
+      uFill.style.width = "0%";
+      pFill.style.width = "0%";
+      pct.textContent = "—";
+      el.title = base;
+      el.classList.remove("warn", "crit");
+      return;
+    }
+    const used = Math.round(w.usedPercentage);
+    const pace = w.idealPacePct == null ? null : Math.round(w.idealPacePct);
+    const ratio = w.ratioPct == null ? null : Math.round(w.ratioPct);
+    uFill.style.width = Math.min(100, used) + "%";
+    pFill.style.width = (pace === null ? 0 : Math.min(100, pace)) + "%";
+    pct.textContent = used + "%";
+    // Colour tracks the ratio: 90% of the 5h window with 10 min left is fine,
+    // 55% of the 7d window with 6 days left is not.
+    el.classList.toggle("warn", ratio !== null && ratio >= 70 && ratio < 100);
+    el.classList.toggle("crit", ratio !== null && ratio >= 100);
+    // fmtReset returns "" when resetsAt is null — the separator goes with it,
+    // otherwise the tooltip ends on a dangling " · ".
+    const reset = fmtReset(w.resetsAt);
+    el.title = base + " — " + used + "% used"
+      + (pace === null ? "" : ", ideal pace " + pace + "% (" + ratio + "% of pace)")
+      + (reset ? " · " + reset : "");
   }
+
   async function refreshUsage() {
     try {
       const u = await (await fetch("/usage")).json();
       paintGauge($("quota5h"), u.fiveHour);
       paintGauge($("quota7d"), u.sevenDay);
-    } catch { /* leave last values */ }
+      paceBlocked = !!u.blocked;
+      paceReason = u.reason || null;
+    } catch {
+      // Leave the gauges on their last values, but not the verdict: a stuck
+      // `true` would make the client demand confirmation forever where the
+      // server would let the send through. The server re-checks and is the
+      // authority, so failing open here costs nothing.
+      paceBlocked = false;
+      paceReason = null;
+    }
   }
   refreshUsage();
   setInterval(refreshUsage, 60_000);

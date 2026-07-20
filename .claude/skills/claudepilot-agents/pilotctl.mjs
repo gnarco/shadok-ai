@@ -130,7 +130,10 @@ export async function collectTurn(client, timeoutMs) {
   };
   client.on(collector);
   const end = await client.waitFor(
-    ["dialog", "turn-done", "exited", "stopped", "error", "socket-closed"],
+    // "pace-blocked" is a refusal, not a turn: the server sent nothing to the
+    // TUI, so no turn-done will ever follow. Without it here the call would sit
+    // out the whole timeout and report an indistinguishable {status:"timeout"}.
+    ["dialog", "turn-done", "exited", "stopped", "error", "pace-blocked", "socket-closed"],
     timeoutMs,
   );
   client.off(collector);
@@ -138,6 +141,8 @@ export async function collectTurn(client, timeoutMs) {
   if (end.type === "turn-done") return { status: "answer", text, tools };
   if (end.type === "dialog")
     return { status: "dialog", question: end.question, options: end.options, multi: end.multi, text };
+  if (end.type === "pace-blocked")
+    return { status: "pace-blocked", reason: end.reason ?? null, text };
   if (end.type === "timeout") return { status: "timeout", screen: client.state.lastScreen, text };
   if (end.type === "error") return { status: "error", error: end.message };
   return { status: "exited", code: end.code ?? null, text };

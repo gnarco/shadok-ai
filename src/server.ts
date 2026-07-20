@@ -16,7 +16,8 @@ import { screenShowsWork } from "./detect.js";
 import { ClaudePilot } from "./session.js";
 import { TmuxPilot, tmuxAvailable } from "./tmux.js";
 import { scanUsage, sessionFilePath, tailSession, type TokenUsage } from "./tail.js";
-import { getUsage } from "./usage.js";
+import { computePace, paceBlock, WINDOW_SEC } from "./pace.js";
+import { getUsage, type Window } from "./usage.js";
 import {
   createWorktree,
   ensureWorktreeCheckout,
@@ -57,9 +58,21 @@ app.get("/live", (_req, res) => {
       })),
   );
 });
-// Current 5-hour and 7-day subscription usage (for the quota gauges).
+// Current 5-hour and 7-day subscription usage, each window enriched with how it
+// compares to the time already elapsed (for the quota gauges and the send guard).
 app.get("/usage", async (_req, res) => {
-  res.json((await getUsage()) ?? { fiveHour: null, sevenDay: null, fetchedAt: Date.now() });
+  const u = await getUsage();
+  const now = Date.now();
+  // The pace is derived per request, not per fetch: getUsage() caches for 60 s
+  // and a frozen pace would drift away from the clock.
+  const enrich = (w: Window | null, durationSec: number) =>
+    w ? { ...w, ...computePace(w, durationSec, now) } : null;
+  res.json({
+    fiveHour: enrich(u?.fiveHour ?? null, WINDOW_SEC.fiveHour),
+    sevenDay: enrich(u?.sevenDay ?? null, WINDOW_SEC.sevenDay),
+    fetchedAt: u?.fetchedAt ?? now,
+    ...paceBlock(u, now),
+  });
 });
 // Changes made by a session (git status + diff), for the review panel.
 app.get("/diff", (req, res) => {
@@ -92,7 +105,8 @@ type ClientMessage =
       /** Reopen: the repo the worktree belongs to (to recreate the checkout). */
       repo?: string;
     }
-  | { type: "prompt"; text: string }
+  /** `force`: envoyer malgré un dépassement du rythme. Vaut pour ce message seul. */
+  | { type: "prompt"; text: string; force?: boolean }
   | { type: "choose"; n: number }
   | { type: "toggle"; n: number }
   | { type: "confirm" }
@@ -341,6 +355,12 @@ function clearRetry(s: Live, notify = false) {
 }
 
 /**
+ * Pas de re-test du rythme pendant une pause. Aligné sur le TTL du cache de
+ * usage.ts : la boucle d'attente n'émet aucune requête vers l'API.
+ */
+const PACE_RECHECK_MS = 60_000;
+
+/**
  * If the turn died on a NEW transient API error (529 Overloaded, 5xx,
  * timeout…), schedules an automatic `continue` — 15 s, then 30 s, then
  * 60 s. Cancelled if the user takes over; gives up after 3 attempts.
@@ -368,9 +388,48 @@ function maybeScheduleRetry(s: Live) {
     attempt: s.retryCount,
     max: RETRY_DELAYS_MS.length,
   });
-  s.retryTimer = setTimeout(async () => {
+  // Set when the retry has been parked on a pace overrun, so the resume is
+  // announced only to clients that were told about the pause.
+  let held = false;
+  const fire = async () => {
+    // Keep s.retryTimer pointing at this chain across the await below: it is
+    // both the "a retry is pending" guard for maybeScheduleRetry and this
+    // chain's identity token.
+    const mine = s.retryTimer;
+    if (s.pilot.hasExited || s.busy) {
+      s.retryTimer = null;
+      return;
+    }
+    // Never forced: an automatic turn must not spend quota the user is being
+    // asked to hold back on. Park and re-test until the pace comes back down.
+    // A failed usage read must never block: paceBlock(null, …) reports
+    // "not blocked", so a rejection degrades to letting the retry through
+    // rather than wedging the chain on an unhandled rejection.
+    const verdict = paceBlock(await getUsage().catch(() => null), Date.now());
+    // A takeover (or teardown) replaced or cleared our timer while we were
+    // fetching: this chain is no longer the live one, so stand down — and
+    // leave s.retryTimer alone, it now belongs to whoever replaced us.
+    if (s.retryTimer !== mine) return;
+    // Still ours, but the session died or a turn started on its own while we
+    // were fetching (the screen watcher sets s.busy without touching
+    // s.retryTimer). Submitting `continue` now would spend quota on an
+    // already-running turn. Release our own already-fired handle, otherwise
+    // maybeScheduleRetry's `if (s.retryTimer) return` guard stays wedged for
+    // this session until something else happens to call clearRetry.
+    if (s.pilot.hasExited || s.busy) {
+      s.retryTimer = null;
+      return;
+    }
+    if (verdict.blocked) {
+      if (!held) {
+        held = true;
+        broadcast(s, { type: "pace-hold", reason: verdict.reason });
+      }
+      s.retryTimer = setTimeout(fire, PACE_RECHECK_MS);
+      return;
+    }
     s.retryTimer = null;
-    if (s.pilot.hasExited || s.busy) return;
+    if (held) broadcast(s, { type: "pace-resumed" });
     broadcast(s, { type: "prompt-echo", text: "continue", auto: true });
     s.busy = true;
     s.turnStartedAt = Date.now();
@@ -383,7 +442,8 @@ function maybeScheduleRetry(s: Live) {
       s.busy = false;
     }
     await finishTurn(s).catch(() => {});
-  }, delayMs);
+  };
+  s.retryTimer = setTimeout(fire, delayMs);
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -411,9 +471,12 @@ wss.on("connection", (ws: WebSocket) => {
 
     try {
       // Any user takeover cancels a pending auto-retry and ends the streak.
+      // "prompt" is settled inside its own case instead: a prompt refused on
+      // pace grounds sends nothing, so it must not count as a takeover — it
+      // would silently kill the pace pause it was just told about.
       if (
         session &&
-        ["prompt", "choose", "toggle", "freetext", "confirm", "key"].includes(msg.type)
+        ["choose", "toggle", "freetext", "confirm", "key"].includes(msg.type)
       ) {
         clearRetry(session, true);
         session.retryCount = 0;
@@ -533,6 +596,22 @@ wss.on("connection", (ws: WebSocket) => {
           if (session.busy) return fail("a response is already in progress");
           const text = msg.text.trim();
           if (!text) return;
+          // Above the ideal pace, a prompt needs an explicit second click. The
+          // check lives here because this is the single door every user prompt
+          // goes through — including the pilotctl thin client.
+          if (!msg.force) {
+            const verdict = paceBlock(await getUsage(), Date.now());
+            if (verdict.blocked) return send({ type: "pace-blocked", reason: verdict.reason, text });
+            // The busy test above is now stale: a parked fire() (or another
+            // client's prompt) can have claimed the session while we awaited
+            // getUsage(). Submitting now would interleave two texts into one
+            // TUI. Mirrors the re-check fire() does after its own await.
+            if (session.busy) return fail("a response is already in progress");
+          }
+          // Getting here means the prompt is really being sent — that is the
+          // takeover. A pending auto-retry (or pace pause) gives way to it.
+          clearRetry(session, true);
+          session.retryCount = 0;
           session.lastPrompt = text;
           // The session's other clients see the prompt arrive.
           broadcast(session, { type: "prompt-echo", text }, ws);

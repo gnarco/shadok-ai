@@ -74,6 +74,56 @@ test("prompt sans fin de tour rend un timeout avec le screen courant", async () 
   }
 });
 
+// Le serveur refuse au-dessus du rythme idéal : il envoie "pace-blocked" et
+// n'écrit RIEN dans le TUI, donc aucun "turn-done" ne suivra jamais. Le tour
+// doit se terminer tout de suite avec la raison, et surtout pas épuiser le
+// timeout (600 s par défaut) pour rendre un {status:"timeout"} muet.
+test("prompt refusé au rythme se termine tout de suite avec la raison", async () => {
+  const mock = await startMockServer({
+    start: [READY],
+    prompt: [
+      { type: "pace-blocked", reason: "7d: 55% used vs 14% ideal pace (285% of pace)", text: "fais un truc" },
+    ],
+  });
+  useMock(mock);
+  try {
+    const t0 = Date.now();
+    // Timeout large : s'il était atteint, le test durerait 30 s et le status
+    // serait "timeout" — les deux assertions ci-dessous le détecteraient.
+    const r = await run(["prompt", "abc", "fais un truc", "--timeout", "30"]);
+    assert.equal(r.status, "pace-blocked");
+    assert.equal(r.reason, "7d: 55% used vs 14% ideal pace (285% of pace)");
+    assert.ok(Date.now() - t0 < 5_000, "doit rendre la main sans attendre le timeout");
+    // Rien n'a été forcé : pilotctl envoie le prompt tel quel, une seule fois.
+    assert.deepEqual(mock.received[1], { type: "prompt", text: "fais un truc" });
+    assert.equal(mock.received.length, 2);
+  } finally {
+    await mock.close();
+  }
+});
+
+// Non-régression : ajouter "pace-blocked" à la liste des fins de tour ne doit
+// rien changer à un prompt normal.
+test("prompt normal reste inchangé par la fin de tour pace-blocked", async () => {
+  const mock = await startMockServer({
+    start: [READY],
+    prompt: [
+      { type: "working" },
+      { type: "stream-text", text: "Bonjour" },
+      { type: "turn-done", sessionId: "abc" },
+    ],
+  });
+  useMock(mock);
+  try {
+    const r = await run(["prompt", "abc", "fais un truc", "--timeout", "30"]);
+    assert.equal(r.status, "answer");
+    assert.equal(r.text, "Bonjour");
+    assert.equal(r.reason, undefined);
+  } finally {
+    await mock.close();
+  }
+});
+
 test("choose valide une option et attend la suite", async () => {
   const mock = await startMockServer({
     start: [READY],
