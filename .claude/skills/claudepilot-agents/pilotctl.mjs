@@ -226,6 +226,29 @@ async function cmdHold(id, cwd) {
   return new Promise(() => {}); // never resolves; the WS keeps the loop alive
 }
 
+// Attaches to a piloted session and sends one protocol message, then waits
+// for the outcome of the turn (answer, dialog, timeout…).
+async function cmdTurn(id, msg, flags) {
+  await ensureServer();
+  const st = readState(id);
+  const cwd = flags.cwd ?? st?.cwd ?? undefined;
+  await ensureHolder(id, cwd);
+  const client = await openSession({ resume: id, cwd });
+  client.send(msg);
+  const result = await collectTurn(client, Number(flags.timeout ?? 600) * 1000);
+  client.ws.close();
+  if (result.status === "error") throw new Error(result.error);
+  return { ...result, sessionId: id };
+}
+
+async function cmdDialog(id, flags) {
+  // `settle` is silently ignored server-side while a turn is in flight, and
+  // triggers a dialog/turn-done broadcast when idle — safe to always send.
+  const r = await cmdTurn(id, { type: "settle" }, flags);
+  if (r.status === "answer") return { status: "idle", sessionId: id, text: r.text };
+  return r;
+}
+
 const HELP =
   "usage: pilotctl <spawn|prompt|dialog|choose|toggle|confirm|freetext|list|diff|stop|screen> …";
 
@@ -236,6 +259,18 @@ export async function run(argv) {
       return cmdSpawn(flags);
     case "hold":
       return cmdHold(pos[0], pos[1]);
+    case "prompt":
+      return cmdTurn(pos[0], { type: "prompt", text: pos[1] }, flags);
+    case "dialog":
+      return cmdDialog(pos[0], flags);
+    case "choose":
+      return cmdTurn(pos[0], { type: "choose", n: Number(pos[1]) }, flags);
+    case "toggle":
+      return cmdTurn(pos[0], { type: "toggle", n: Number(pos[1]) }, flags);
+    case "confirm":
+      return cmdTurn(pos[0], { type: "confirm" }, flags);
+    case "freetext":
+      return cmdTurn(pos[0], { type: "freetext", n: Number(pos[1]), text: pos[2] }, flags);
     default:
       throw new Error(HELP);
   }
