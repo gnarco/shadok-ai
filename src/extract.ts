@@ -69,7 +69,12 @@ export interface TuiDialog {
  * prompt…): numbered options, one of which carries the "❯" selector.
  */
 export function detectDialog(screen: string): TuiDialog | null {
-  const lines = screen.split("\n");
+  // AskUserQuestion can render a preview (chart, code…) in a right-hand column
+  // on the SAME lines as the options. Strip that column — a run of ≥2 spaces
+  // followed by a box-drawing char — so option labels don't absorb it.
+  const lines = screen
+    .split("\n")
+    .map((l) => l.replace(/\s{2,}[│┌└├┐┘┤┬┴┼─╭╮╰╯].*$/u, "").replace(/\s+$/, ""));
   const optionRe = /^\s*(❯\s*)?(\d+)\.\s+(?:\[( |✔|✓|x)\]\s*)?(.+)$/;
   const options: TuiDialogOption[] = [];
   let hasSelector = false;
