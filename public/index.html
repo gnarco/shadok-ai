@@ -1203,7 +1203,7 @@
   });
 
   /** State line shown while the auto-continue waits for the pace to recover. */
-  const PACE_HOLD_STATE = "en attente du rythme";
+  const PACE_HOLD_STATE = "waiting on pace";
 
   function setTabState(tab, status, text) {
     // A pause of the auto-continue can end without a "pace-resumed": a takeover
@@ -1819,6 +1819,10 @@
             }
           }
         }
+        // launchTab reuses the tab object, so a bubble armed before the session
+        // ended would come back to life against the *new* session and resend
+        // yesterday's text forced. A new session answers no old question.
+        retirePaceConfirm(t);
         setTabState(t, "ready", "ready");
         persistChannels();
         addTurn(t, "system", "", "Session established. The pilot has the controls.");
@@ -1926,7 +1930,7 @@
         // A takeover ends a parked auto-continue too, and no "pace-resumed"
         // follows — say so rather than leaving the pause line hanging.
         if (t.paceHeld) {
-          addTurn(t, "system", "", "Auto-continue annulé — reprise manuelle.");
+          addTurn(t, "system", "", "Auto-continue cancelled — back to manual.");
         }
         setTabState(t, "ready", "ready");
         break;
@@ -1952,7 +1956,7 @@
         if (rollback) {
           stopTurnTimer(t);
           // Nothing here should overwrite a live state line: a parked
-          // auto-continue ("en attente du rythme") and a pending auto-retry
+          // auto-continue ("waiting on pace") and a pending auto-retry
           // ("auto-retry in N s") both outlive the refusal. submitPrompt never
           // changed the text, so re-asserting the current one is the rollback.
           setTabState(t, "ready", t.stateText);
@@ -1965,17 +1969,22 @@
         // user has moved to another channel the bubble lands in a hidden
         // transcript, so flag it the way auto-retry-gave-up flags a channel
         // waiting on the user.
-        if (rollback) setTabMood(t, t === active ? null : "needs-answer");
+        // The highlight is not part of the rollback: it belongs to the new
+        // bubble. A channel that died between two refusals takes the `rollback
+        // === false` path, and gating on it there left an armed bubble in a
+        // hidden transcript with nothing pointing at it.
+        if (t !== active) setTabMood(t, "needs-answer");
+        else if (rollback) setTabMood(t, null);
         break;
       case "pace-hold":
         addTurn(t, "system", "",
-          "Auto-continue en pause — " + (msg.reason || "rythme dépassé") +
-          ". Reprise automatique dès le retour sous le seuil.");
+          "Auto-continue paused — " + (msg.reason || "pace exceeded") +
+          ". Resumes automatically once back under the threshold.");
         setTabState(t, "ready", PACE_HOLD_STATE);
         t.paceHeld = true;
         break;
       case "pace-resumed":
-        addTurn(t, "system", "", "Rythme revenu sous le seuil — auto-continue repris.");
+        addTurn(t, "system", "", "Pace back under the threshold — auto-continue resumed.");
         setTabState(t, "ready", "ready");
         break;
     }
@@ -2106,17 +2115,17 @@
     turn.className = "turn claude dialog";
     const label = document.createElement("span");
     label.className = "label";
-    label.textContent = "claudepilot — rythme dépassé";
+    label.textContent = "claudepilot — pace exceeded";
     const bubble = document.createElement("div");
     bubble.className = "bubble";
     const q = document.createElement("div");
     q.className = "question";
-    q.textContent = (reason || "Consommation au-dessus du rythme idéal")
-      + " — envoyer quand même ?";
+    q.textContent = (reason || "Consumption above the ideal pace")
+      + " — send anyway?";
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "choice";
-    btn.textContent = "Forcer l'envoi";
+    btn.textContent = "Force send";
     btn.addEventListener("click", () => {
       if (tab.status !== "ready" || !tab.ws) return;
       // submitPrompt retires this bubble (disabling the button, marking it
@@ -2247,9 +2256,12 @@
     // 55% of the 7d window with 6 days left is not.
     el.classList.toggle("warn", ratio !== null && ratio >= 70 && ratio < 100);
     el.classList.toggle("crit", ratio !== null && ratio >= 100);
+    // fmtReset returns "" when resetsAt is null — the separator goes with it,
+    // otherwise the tooltip ends on a dangling " · ".
+    const reset = fmtReset(w.resetsAt);
     el.title = base + " — " + used + "% used"
       + (pace === null ? "" : ", ideal pace " + pace + "% (" + ratio + "% of pace)")
-      + " · " + fmtReset(w.resetsAt);
+      + (reset ? " · " + reset : "");
   }
 
   async function refreshUsage() {
@@ -2259,7 +2271,14 @@
       paintGauge($("quota7d"), u.sevenDay);
       paceBlocked = !!u.blocked;
       paceReason = u.reason || null;
-    } catch { /* leave last values */ }
+    } catch {
+      // Leave the gauges on their last values, but not the verdict: a stuck
+      // `true` would make the client demand confirmation forever where the
+      // server would let the send through. The server re-checks and is the
+      // authority, so failing open here costs nothing.
+      paceBlocked = false;
+      paceReason = null;
+    }
   }
   refreshUsage();
   setInterval(refreshUsage, 60_000);
