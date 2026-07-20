@@ -104,7 +104,8 @@ type ClientMessage =
       /** Reopen: the repo the worktree belongs to (to recreate the checkout). */
       repo?: string;
     }
-  | { type: "prompt"; text: string }
+  /** `force`: envoyer malgré un dépassement du rythme. Vaut pour ce message seul. */
+  | { type: "prompt"; text: string; force?: boolean }
   | { type: "choose"; n: number }
   | { type: "toggle"; n: number }
   | { type: "confirm" }
@@ -524,6 +525,13 @@ wss.on("connection", (ws: WebSocket) => {
           if (session.busy) return fail("a response is already in progress");
           const text = msg.text.trim();
           if (!text) return;
+          // Above the ideal pace, a prompt needs an explicit second click. The
+          // check lives here because this is the single door every user prompt
+          // goes through — including the pilotctl thin client.
+          if (!msg.force) {
+            const verdict = paceBlock(await getUsage(), Date.now());
+            if (verdict.blocked) return send({ type: "pace-blocked", reason: verdict.reason, text });
+          }
           session.lastPrompt = text;
           // The session's other clients see the prompt arrive.
           broadcast(session, { type: "prompt-echo", text }, ws);
