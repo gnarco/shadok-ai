@@ -428,7 +428,53 @@ git commit -m "feat(pace): refuse les prompts au-dessus du rythme sauf forçage 
   - `{ type: "pace-hold", reason: string | null }` — émis **une seule fois** par pause, pas à chaque re-test.
   - `{ type: "pace-resumed" }` — émis seulement si une pause avait eu lieu.
 
-- [ ] **Step 1: Ajouter la constante de re-test**
+- [ ] **Step 1: Faire survivre la pause à un prompt refusé**
+
+La pause vit dans `s.retryTimer`. Or le bloc « user takeover » tourne avant le `switch` et annule l'auto-retry pour tout message de type `prompt` — y compris un prompt que le contrôle de rythme va refuser juste après. La pause mourrait donc silencieusement à la première tentative d'envoi, alors qu'elle doit reprendre seule dès le retour sous le seuil.
+
+Un prompt refusé n'envoie rien : ce n'est pas une reprise en main. Un prompt réellement soumis — forcé ou non bloqué — en est une.
+
+Remplacer le bloc de `src/server.ts:409-417` :
+
+```ts
+    try {
+      // Any user takeover cancels a pending auto-retry and ends the streak.
+      if (
+        session &&
+        ["prompt", "choose", "toggle", "freetext", "confirm", "key"].includes(msg.type)
+      ) {
+        clearRetry(session, true);
+        session.retryCount = 0;
+      }
+```
+
+par :
+
+```ts
+    try {
+      // Any user takeover cancels a pending auto-retry and ends the streak.
+      // "prompt" is settled inside its own case instead: a prompt refused on
+      // pace grounds sends nothing, so it must not count as a takeover — it
+      // would silently kill the pace pause it was just told about.
+      if (
+        session &&
+        ["choose", "toggle", "freetext", "confirm", "key"].includes(msg.type)
+      ) {
+        clearRetry(session, true);
+        session.retryCount = 0;
+      }
+```
+
+Puis, dans `case "prompt"`, juste après le contrôle de rythme ajouté en Task 3 (le bloc `if (!msg.force) { … }`) et avant `session.lastPrompt = text;`, insérer :
+
+```ts
+          // Getting here means the prompt is really being sent — that is the
+          // takeover. A pending auto-retry (or pace pause) gives way to it.
+          clearRetry(session, true);
+          session.retryCount = 0;
+```
+
+- [ ] **Step 2: Ajouter la constante de re-test**
 
 Juste au-dessus de `function maybeScheduleRetry` (server.ts:331), ajouter :
 
@@ -440,7 +486,7 @@ Juste au-dessus de `function maybeScheduleRetry` (server.ts:331), ajouter :
 const PACE_RECHECK_MS = 60_000;
 ```
 
-- [ ] **Step 2: Remplacer le corps du minuteur**
+- [ ] **Step 4: Remplacer le corps du minuteur**
 
 Remplacer les lignes 354-369 :
 
@@ -502,12 +548,12 @@ par :
 
 La pause réutilise `s.retryTimer`, donc `clearRetry()` (server.ts:319) et le nettoyage de session (server.ts:188) l'annulent sans code supplémentaire — y compris quand l'utilisateur reprend la main (server.ts:396-402).
 
-- [ ] **Step 3: Vérifier la compilation**
+- [ ] **Step 5: Vérifier la compilation**
 
 Run: `npm run build`
 Expected: aucune erreur.
 
-- [ ] **Step 4: Vérifier la pause à la main**
+- [ ] **Step 6: Vérifier la pause à la main**
 
 Même méthode qu'en Task 3 — forcer `paceBlock` à renvoyer `{ blocked: true, reason: "test" }`, puis abaisser temporairement `RETRY_DELAYS_MS` dans `src/retry.ts` à `[1000]` et `PACE_RECHECK_MS` à `2000` pour ne pas attendre.
 
@@ -517,12 +563,12 @@ Expected: `pace-hold` diffusé une fois, ré-émission du minuteur toutes les 2 
 
 **Rétablir `src/pace.ts`, `src/retry.ts` et `PACE_RECHECK_MS` avant de committer** : `git diff src/pace.ts src/retry.ts` doit être vide.
 
-- [ ] **Step 5: Vérifier que les tests passent toujours**
+- [ ] **Step 7: Vérifier que les tests passent toujours**
 
 Run: `npm test 2>&1 | tail -8`
 Expected: 35 pass, 0 fail.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 git add src/server.ts
