@@ -146,6 +146,9 @@ interface Live {
   retryCount: number;
   /** Transient error lines already on screen when the turn started. */
   errorsAtTurnStart: string[];
+  /** Epoch ms when the in-flight turn started — lets clients (re)joining
+   *  mid-turn show the real thinking time instead of restarting at zero. */
+  turnStartedAt: number | null;
 }
 
 /** Session-wide token totals, for the window-title counter. */
@@ -229,6 +232,7 @@ async function createSession(
     retryTimer: null,
     retryCount: 0,
     errorsAtTurnStart: [],
+    turnStartedAt: null,
   };
   pilot.onExit((code) => {
     broadcast(s, { type: "exited", code });
@@ -284,8 +288,9 @@ async function createSession(
  */
 async function finishTurn(s: Live) {
   s.busy = true;
+  if (!s.turnStartedAt) s.turnStartedAt = Date.now();
   s.errorsAtTurnStart = findTransientErrors(s.pilot.screen());
-  broadcast(s, { type: "working" });
+  broadcast(s, { type: "working", startedAt: s.turnStartedAt });
   try {
     await s.pilot.waitForIdle({ stableMs: 2000, timeoutMs: 900_000 });
     const dialog = detectDialog(s.pilot.screen());
@@ -296,6 +301,7 @@ async function finishTurn(s: Live) {
     }
   } finally {
     s.busy = false;
+    s.turnStartedAt = null;
   }
 }
 
@@ -350,7 +356,8 @@ function maybeScheduleRetry(s: Live) {
     if (s.pilot.hasExited || s.busy) return;
     broadcast(s, { type: "prompt-echo", text: "continue", auto: true });
     s.busy = true;
-    broadcast(s, { type: "working" });
+    s.turnStartedAt = Date.now();
+    broadcast(s, { type: "working", startedAt: s.turnStartedAt });
     try {
       await s.pilot.submit("continue");
     } catch {
@@ -476,7 +483,8 @@ wss.on("connection", (ws: WebSocket) => {
               text: session.pilot.screen(),
               working: session.pilot.isWorking(),
             });
-            if (session.busy) send({ type: "working" });
+            if (session.busy)
+              send({ type: "working", startedAt: session.turnStartedAt });
             sendPendingDialog(session, send);
             break;
           }
@@ -507,7 +515,8 @@ wss.on("connection", (ws: WebSocket) => {
           // The session's other clients see the prompt arrive.
           broadcast(session, { type: "prompt-echo", text }, ws);
           session.busy = true;
-          broadcast(session, { type: "working" });
+          session.turnStartedAt = Date.now();
+          broadcast(session, { type: "working", startedAt: session.turnStartedAt });
           try {
             await session.pilot.submit(text);
           } finally {
