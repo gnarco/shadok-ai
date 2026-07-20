@@ -1,5 +1,6 @@
 import pty from "node-pty";
 import xterm from "@xterm/headless";
+import { screenShowsWork } from "./detect.js";
 
 const { Terminal } = xterm;
 
@@ -24,8 +25,6 @@ export interface WaitIdleOptions extends WaitOptions {
   stableMs?: number;
 }
 
-/** Marker displayed by the Claude Code TUI while it is working. */
-const WORKING_MARKER = /esc to interrupt/i;
 
 /**
  * Drives an interactive `claude` session (the TUI) through a pseudo-terminal.
@@ -164,7 +163,7 @@ export class ClaudePilot {
     // Sent = spinner visible, or input box empty again while the text is
     // still on screen ("❯ …" echo in the transcript).
     const submitted = (s: string) => {
-      if (WORKING_MARKER.test(s)) return true;
+      if (screenShowsWork(s)) return true;
       const lines = s.split("\n");
       const promptLines = lines.filter((l) => l.trimStart().startsWith("❯"));
       const inputLine = promptLines[promptLines.length - 1] ?? "";
@@ -199,7 +198,7 @@ export class ClaudePilot {
 
   /** True when the TUI indicates that Claude is working. */
   isWorking(): boolean {
-    return WORKING_MARKER.test(this.screen());
+    return screenShowsWork(this.screen());
   }
 
   /** Waits until a predicate on the screen becomes true. */
@@ -233,7 +232,7 @@ export class ClaudePilot {
     while (Date.now() < deadline) {
       if (this.exited) throw new Error("The claude process has exited.");
       const s = this.screen();
-      const working = WORKING_MARKER.test(s);
+      const working = screenShowsWork(s);
       if (!working && s === lastScreen) {
         if (stableSince === 0) stableSince = Date.now();
         if (Date.now() - stableSince >= stableMs) return s;
