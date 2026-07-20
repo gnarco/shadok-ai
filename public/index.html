@@ -81,13 +81,15 @@
   @keyframes breathe { 50% { opacity: 0.35; } }
   @media (prefers-reduced-motion: reduce) { .led.busy { animation: none; } }
   header .spacer { flex: 1; }
-  /* Quota gauges (5h / 7d subscription usage) */
+  /* Quota gauges (5h / 7d subscription usage).
+     Two stacked bars: what has been spent, and how much of the window has
+     elapsed. Top bar longer than the bottom one = spending faster than time. */
   .quota { min-width: 92px; }
   .quota .meter {
-    height: 6px;
+    height: 3px;
     background: var(--bg-inset);
     border: 1px solid var(--line);
-    border-radius: 3px;
+    border-radius: 2px;
     overflow: hidden;
     margin: 1px 0;
   }
@@ -98,8 +100,11 @@
     background: var(--ok);
     transition: width 0.4s ease;
   }
-  .quota.warn .fill { background: var(--amber); }
-  .quota.crit .fill { background: var(--err); }
+  /* The pace bar is a reference, not a status: it never takes the alert colour. */
+  .quota .meter.pace .fill { background: var(--text-dim); }
+  /* Colour follows the RATIO, not the raw usage. */
+  .quota.warn .meter.usage .fill { background: var(--amber); }
+  .quota.crit .meter.usage .fill { background: var(--err); }
   .quota .qpct {
     font-family: var(--mono);
     font-size: 11px;
@@ -747,12 +752,14 @@
   <span class="spacer"></span>
   <div class="gauge quota" id="quota5h" title="5-hour rolling limit">
     <span class="label">5h</span>
-    <div class="meter"><span class="fill"></span></div>
+    <div class="meter usage"><span class="fill"></span></div>
+    <div class="meter pace"><span class="fill"></span></div>
     <span class="qpct">—</span>
   </div>
   <div class="gauge quota" id="quota7d" title="7-day rolling limit">
     <span class="label">7d</span>
-    <div class="meter"><span class="fill"></span></div>
+    <div class="meter usage"><span class="fill"></span></div>
+    <div class="meter pace"><span class="fill"></span></div>
     <span class="qpct">—</span>
   </div>
   <button id="toggleDiff">Diff</button>
@@ -2075,23 +2082,44 @@
     const m = Math.floor((d % 3600000) / 60000);
     return "resets in " + (h ? h + "h" + (m ? m + "m" : "") : m + "m");
   }
+  /** Last verdict from /usage — read by the composer before sending. */
+  let paceBlocked = false, paceReason = null;
+
   function paintGauge(el, w) {
-    const fill = el.querySelector(".fill");
+    const uFill = el.querySelector(".meter.usage .fill");
+    const pFill = el.querySelector(".meter.pace .fill");
     const pct = el.querySelector(".qpct");
-    if (!w) { fill.style.width = "0%"; pct.textContent = "—"; el.title = ""; return; }
-    const p = Math.round(w.usedPercentage);
-    fill.style.width = Math.min(100, p) + "%";
-    pct.textContent = p + "%";
-    el.classList.toggle("warn", p >= 70 && p < 90);
-    el.classList.toggle("crit", p >= 90);
     const base = el.id === "quota5h" ? "5-hour rolling limit" : "7-day rolling limit";
-    el.title = base + " — " + p + "% used · " + fmtReset(w.resetsAt);
+    if (!w) {
+      uFill.style.width = "0%";
+      pFill.style.width = "0%";
+      pct.textContent = "—";
+      el.title = base;
+      el.classList.remove("warn", "crit");
+      return;
+    }
+    const used = Math.round(w.usedPercentage);
+    const pace = w.idealPacePct == null ? null : Math.round(w.idealPacePct);
+    const ratio = w.ratioPct == null ? null : Math.round(w.ratioPct);
+    uFill.style.width = Math.min(100, used) + "%";
+    pFill.style.width = (pace === null ? 0 : Math.min(100, pace)) + "%";
+    pct.textContent = used + "%";
+    // Colour tracks the ratio: 90% of the 5h window with 10 min left is fine,
+    // 55% of the 7d window with 6 days left is not.
+    el.classList.toggle("warn", ratio !== null && ratio >= 70 && ratio < 100);
+    el.classList.toggle("crit", ratio !== null && ratio >= 100);
+    el.title = base + " — " + used + "% used"
+      + (pace === null ? "" : ", ideal pace " + pace + "% (" + ratio + "% of pace)")
+      + " · " + fmtReset(w.resetsAt);
   }
+
   async function refreshUsage() {
     try {
       const u = await (await fetch("/usage")).json();
       paintGauge($("quota5h"), u.fiveHour);
       paintGauge($("quota7d"), u.sevenDay);
+      paceBlocked = !!u.blocked;
+      paceReason = u.reason || null;
     } catch { /* leave last values */ }
   }
   refreshUsage();
