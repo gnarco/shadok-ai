@@ -375,11 +375,20 @@ function maybeScheduleRetry(s: Live) {
   // announced only to clients that were told about the pause.
   let held = false;
   const fire = async () => {
-    s.retryTimer = null;
-    if (s.pilot.hasExited || s.busy) return;
+    // Keep s.retryTimer pointing at this chain across the await below: it is
+    // both the "a retry is pending" guard for maybeScheduleRetry and this
+    // chain's identity token.
+    const mine = s.retryTimer;
+    if (s.pilot.hasExited || s.busy) {
+      s.retryTimer = null;
+      return;
+    }
     // Never forced: an automatic turn must not spend quota the user is being
     // asked to hold back on. Park and re-test until the pace comes back down.
     const verdict = paceBlock(await getUsage(), Date.now());
+    // A takeover (or teardown) replaced or cleared our timer while we were
+    // fetching: this chain is no longer the live one, so stand down.
+    if (s.retryTimer !== mine) return;
     if (verdict.blocked) {
       if (!held) {
         held = true;
@@ -388,6 +397,7 @@ function maybeScheduleRetry(s: Live) {
       s.retryTimer = setTimeout(fire, PACE_RECHECK_MS);
       return;
     }
+    s.retryTimer = null;
     if (held) broadcast(s, { type: "pace-resumed" });
     broadcast(s, { type: "prompt-echo", text: "continue", auto: true });
     s.busy = true;
