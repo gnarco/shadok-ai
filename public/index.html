@@ -181,15 +181,67 @@
     flex: none;
   }
   .tab .close:hover { color: var(--err); }
-  #newTab {
+  #newTab, #newGroup {
     margin-top: 8px;
     border: 1px dashed var(--line);
     font-size: 12px;
     color: var(--text-dim);
     padding: 8px;
   }
-  #newTab:hover { color: var(--amber); border-color: var(--amber); }
+  #newTab:hover, #newGroup:hover { color: var(--amber); border-color: var(--amber); }
+  #newGroup { margin-top: 4px; }
   @media (max-width: 900px) { #tabbar { width: 150px; } }
+
+  /* ── Tab groups ──────────────────────────────────────── */
+  #ungrouped, .group-body { display: flex; flex-direction: column; gap: 2px; }
+  .group { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; }
+  .group-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    border-radius: 4px;
+    padding: 5px 8px;
+    cursor: pointer;
+    user-select: none;
+  }
+  .group-head:hover { color: var(--text); background: var(--bg-inset); }
+  .group-head .caret { flex: none; font-size: 9px; }
+  .group-head .gname {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .group-head input.rename {
+    flex: 1;
+    min-width: 0;
+    font-family: var(--mono);
+    font-size: 11px;
+    text-transform: none;
+    letter-spacing: normal;
+    background: var(--bg-inset);
+    border: 1px solid var(--amber);
+    border-radius: 3px;
+    color: var(--text);
+    padding: 2px 5px;
+  }
+  .group-head .gclose { flex: none; font-size: 13px; padding: 0 2px; line-height: 1; }
+  .group-head .gclose:hover { color: var(--err); }
+  .group-body { padding-left: 10px; }
+  .group.collapsed .group-body { display: none; }
+  .tab.dragging, .group.dragging { opacity: 0.4; }
+  /* While dragging a tab, empty drop zones become visible targets. */
+  body.dragging-tab #ungrouped:empty,
+  body.dragging-tab .group-body:empty {
+    min-height: 26px;
+    border: 1px dashed var(--line);
+    border-radius: 4px;
+  }
 
   /* ── Body ────────────────────────────────────────────── */
   main { flex: 1; display: flex; min-height: 0; }
@@ -632,7 +684,10 @@
 <main>
   <nav id="tabbar" aria-label="Channels">
     <div class="label side-label">Channels</div>
+    <div id="ungrouped"></div>
+    <div id="groups"></div>
     <button id="newTab" title="New channel">＋ new channel</button>
+    <button id="newGroup" title="New tab group">＋ new group</button>
   </nav>
 
   <section class="chat-pane">
@@ -718,7 +773,8 @@
 <script src="/vendor/marked.js"></script>
 <script>
   const $ = (id) => document.getElementById(id);
-  const tabbar = $("tabbar"), newTabBtn = $("newTab");
+  const tabbar = $("tabbar"), newTabBtn = $("newTab"), newGroupBtn = $("newGroup");
+  const ungroupedEl = $("ungrouped"), groupsEl = $("groups");
   const setup = $("setup"), transcripts = $("transcripts"), thinking = $("thinking");
   const composer = $("composer"), promptInput = $("promptInput"), sendBtn = $("sendBtn");
   const machine = $("machine"), screenEl = $("screen");
@@ -744,7 +800,7 @@
     return parts[parts.length - 1] || p || "session";
   }
 
-  function createTab() {
+  function createTab(groupId) {
     seq++;
     const el = document.createElement("div");
     el.className = "transcript";
@@ -753,6 +809,7 @@
 
     const btn = document.createElement("div");
     btn.className = "tab";
+    btn.draggable = true;
     const led = document.createElement("span");
     led.className = "led";
     const name = document.createElement("span");
@@ -764,7 +821,8 @@
     close.textContent = "×";
     close.title = "Close this channel";
     btn.append(led, name, close);
-    tabbar.insertBefore(btn, newTabBtn);
+    const group = groupId != null && groups.find((g) => g.id === groupId);
+    (group ? group.bodyEl : ungroupedEl).appendChild(btn);
 
     const tab = {
       id: seq,
@@ -778,6 +836,7 @@
       transcriptEl: el,
       btnEl: btn, ledEl: led, nameEl: name,
     };
+    btn._tab = tab;
     btn.addEventListener("click", (e) => {
       if (e.target === close) closeTab(tab);
       else activate(tab);
@@ -786,6 +845,14 @@
       e.stopPropagation();
       startRename(tab);
     });
+    btn.addEventListener("dragstart", (e) => {
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", "tab");
+      dragTabEl = btn;
+      document.body.classList.add("dragging-tab");
+      requestAnimationFrame(() => btn.classList.add("dragging"));
+    });
+    btn.addEventListener("dragend", () => endDrag());
     tabs.push(tab);
     activate(tab);
     return tab;
@@ -819,13 +886,19 @@
     }
   }
 
-  /** Inline rename of a channel (double-click on its name). */
-  function startRename(tab) {
+  /**
+   * Generic inline rename: swaps `nameEl` for a text input inside `hostEl`
+   * (whose dragging is suspended so text selection doesn't start a drag),
+   * calls `onCommit(value)` on Enter/blur.
+   */
+  function inlineRename(hostEl, nameEl, onCommit) {
+    const wasDraggable = hostEl.draggable;
+    hostEl.draggable = false;
     const inp = document.createElement("input");
     inp.type = "text";
     inp.className = "rename";
-    inp.value = tab.nameEl.textContent;
-    tab.nameEl.replaceWith(inp);
+    inp.value = nameEl.textContent;
+    nameEl.replaceWith(inp);
     inp.focus();
     inp.select();
     let done = false;
@@ -833,13 +906,9 @@
       if (done) return;
       done = true;
       const v = inp.value.trim();
-      if (!cancel && v) {
-        tab.customName = true;
-        tab.nameEl.textContent = v;
-        saveName(tab, v);
-        persistChannels();
-      }
-      inp.replaceWith(tab.nameEl);
+      if (!cancel && v) onCommit(v);
+      inp.replaceWith(nameEl);
+      hostEl.draggable = wasDraggable;
     };
     inp.addEventListener("keydown", (e) => {
       e.stopPropagation();
@@ -848,6 +917,16 @@
     });
     inp.addEventListener("blur", () => commit(false));
     inp.addEventListener("click", (e) => e.stopPropagation());
+  }
+
+  /** Inline rename of a channel (double-click on its name). */
+  function startRename(tab) {
+    inlineRename(tab.btnEl, tab.nameEl, (v) => {
+      tab.customName = true;
+      tab.nameEl.textContent = v;
+      saveName(tab, v);
+      persistChannels();
+    });
   }
 
   function closeTab(tab) {
@@ -867,18 +946,22 @@
   }
 
   /**
-   * Remembers the open channels (session id, directory, name) so they can
-   * be restored — each session resumed — on the next page load.
+   * Remembers the open channels (session id, directory, name, group) so
+   * they can be restored — each session resumed — on the next page load.
+   * DOM order is the source of truth for tab & group ordering.
    */
   function persistChannels() {
-    const list = tabs
-      .filter((t) => t.sessionId)
+    const list = [...tabbar.querySelectorAll(".tab")]
+      .map((el) => el._tab)
+      .filter((t) => t && t.sessionId)
       .map((t) => ({
         sessionId: t.sessionId,
         cwd: t.cwd && t.cwd.startsWith("/") ? t.cwd : "",
         name: t.nameEl.textContent,
+        group: groupIdOf(t.btnEl),
       }));
     localStorage.setItem("cp.channels", JSON.stringify(list));
+    persistGroups();
   }
 
   /** Drops a session id from the remembered channels (invalid / gone). */
@@ -888,6 +971,137 @@
     );
     localStorage.setItem("cp.channels", JSON.stringify(list));
   }
+
+  // ── Tab groups ──────────────────────────────────────────
+  let groups = [];
+  let groupSeq = Number(localStorage.getItem("cp.groupSeq") || 0);
+
+  function groupIdOf(tabEl) {
+    const g = tabEl.closest(".group");
+    return g ? g._group.id : null;
+  }
+
+  function persistGroups() {
+    const list = [...groupsEl.children].map((el) => ({
+      id: el._group.id,
+      name: el._group.nameEl.textContent,
+      collapsed: el.classList.contains("collapsed"),
+    }));
+    localStorage.setItem("cp.groups", JSON.stringify(list));
+    localStorage.setItem("cp.groupSeq", String(groupSeq));
+  }
+
+  function createGroup(opts = {}) {
+    const id = opts.id != null ? opts.id : ++groupSeq;
+    groupSeq = Math.max(groupSeq, id);
+    const el = document.createElement("div");
+    el.className = "group" + (opts.collapsed ? " collapsed" : "");
+    const head = document.createElement("div");
+    head.className = "group-head";
+    head.draggable = true;
+    const caret = document.createElement("span");
+    caret.className = "caret";
+    const gname = document.createElement("span");
+    gname.className = "gname";
+    gname.textContent = opts.name || "group " + id;
+    gname.title = "Double-click to rename";
+    const gclose = document.createElement("span");
+    gclose.className = "gclose";
+    gclose.textContent = "×";
+    gclose.title = "Ungroup (tabs are kept)";
+    head.append(caret, gname, gclose);
+    const body = document.createElement("div");
+    body.className = "group-body";
+    el.append(head, body);
+    groupsEl.appendChild(el);
+
+    const group = { id, el, headEl: head, bodyEl: body, nameEl: gname };
+    el._group = group;
+    const paintCaret = () => {
+      caret.textContent = el.classList.contains("collapsed") ? "▸" : "▾";
+    };
+    paintCaret();
+    head.addEventListener("click", (e) => {
+      if (e.target === gclose) return dissolveGroup(group);
+      el.classList.toggle("collapsed");
+      paintCaret();
+      persistGroups();
+    });
+    gname.addEventListener("dblclick", (e) => {
+      e.stopPropagation();
+      inlineRename(head, gname, (v) => {
+        gname.textContent = v;
+        persistGroups();
+      });
+    });
+    head.addEventListener("dragstart", (e) => {
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", "group");
+      dragGroupEl = el;
+      requestAnimationFrame(() => el.classList.add("dragging"));
+    });
+    head.addEventListener("dragend", () => endDrag());
+    groups.push(group);
+    return group;
+  }
+
+  /** Removes a group; its tabs move back to the ungrouped zone. */
+  function dissolveGroup(group) {
+    while (group.bodyEl.firstChild) ungroupedEl.appendChild(group.bodyEl.firstChild);
+    group.el.remove();
+    groups = groups.filter((g) => g !== group);
+    persistChannels();
+  }
+
+  // ── Drag & drop (tabs + groups, live-sort while dragging) ──
+  let dragTabEl = null;
+  let dragGroupEl = null;
+
+  function endDrag() {
+    if (dragTabEl) dragTabEl.classList.remove("dragging");
+    if (dragGroupEl) dragGroupEl.classList.remove("dragging");
+    dragTabEl = dragGroupEl = null;
+    document.body.classList.remove("dragging-tab");
+    persistChannels();
+  }
+
+  tabbar.addEventListener("dragover", (e) => {
+    if (!dragTabEl && !dragGroupEl) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    if (dragTabEl) {
+      const overTab = e.target.closest(".tab");
+      if (overTab && overTab !== dragTabEl) {
+        const r = overTab.getBoundingClientRect();
+        const after = e.clientY > r.top + r.height / 2;
+        overTab.parentNode.insertBefore(dragTabEl, after ? overTab.nextSibling : overTab);
+        return;
+      }
+      const head = e.target.closest(".group-head");
+      if (head) {
+        const g = head.parentNode;
+        // Dropping on a header files the tab into that group; unfold it so
+        // the tab stays visible.
+        g.classList.remove("collapsed");
+        g._group.headEl.querySelector(".caret").textContent = "▾";
+        if (dragTabEl.parentNode !== g._group.bodyEl)
+          g._group.bodyEl.appendChild(dragTabEl);
+        return;
+      }
+      const zone = e.target.closest("#ungrouped, .group-body");
+      if (zone && dragTabEl.parentNode !== zone) zone.appendChild(dragTabEl);
+    } else if (dragGroupEl) {
+      const overGroup = e.target.closest(".group");
+      if (overGroup && overGroup !== dragGroupEl) {
+        const r = overGroup.getBoundingClientRect();
+        const after = e.clientY > r.top + r.height / 2;
+        groupsEl.insertBefore(dragGroupEl, after ? overGroup.nextSibling : overGroup);
+      }
+    }
+  });
+  tabbar.addEventListener("drop", (e) => {
+    if (dragTabEl || dragGroupEl) e.preventDefault();
+  });
 
   function setTabState(tab, status, text) {
     tab.status = status;
@@ -1445,7 +1659,11 @@
   $("stopBtn").addEventListener("click", () => {
     if (active.ws) active.ws.send(JSON.stringify({ type: "stop" }));
   });
-  newTabBtn.addEventListener("click", createTab);
+  newTabBtn.addEventListener("click", () => createTab());
+  newGroupBtn.addEventListener("click", () => {
+    createGroup();
+    persistGroups();
+  });
 
   // ── Quota gauges (5h / 7d) ──────────────────────────────
   function fmtReset(sec) {
@@ -1478,8 +1696,12 @@
   refreshUsage();
   setInterval(refreshUsage, 60_000);
 
-  // On load: restore the remembered channels by resuming each session (the
-  // server replays the history); otherwise start with a blank channel.
+  // On load: restore the remembered groups, then the remembered channels by
+  // resuming each session (the server replays the history); otherwise start
+  // with a blank channel.
+  for (const g of JSON.parse(localStorage.getItem("cp.groups") || "[]")) {
+    createGroup(g);
+  }
   const savedChannels = JSON.parse(localStorage.getItem("cp.channels") || "[]");
   // Deduplicate by session id (data inherited from an old bug where several
   // channels could converge to the same id).
@@ -1489,7 +1711,8 @@
   );
   if (uniqueChannels.length) {
     for (const s of uniqueChannels) {
-      const t = createTab();
+      // A vanished group falls back to the ungrouped zone.
+      const t = createTab(s.group);
       if (s.name) {
         t.customName = true;
         t.nameEl.textContent = s.name;
