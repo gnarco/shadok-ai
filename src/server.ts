@@ -12,6 +12,7 @@ import {
   loadHistory,
 } from "./extract.js";
 import { findTransientErrors, newTransientErrors, RETRY_DELAYS_MS } from "./retry.js";
+import { screenShowsWork } from "./detect.js";
 import { ClaudePilot } from "./session.js";
 import { TmuxPilot, tmuxAvailable } from "./tmux.js";
 import { scanUsage, sessionFilePath, tailSession, type TokenUsage } from "./tail.js";
@@ -247,10 +248,19 @@ async function createSession(
     if (settled && !s.busy && pilot.isWorking()) finishTurn(s).catch(() => {});
   }, 300);
 
-  let screen = await pilot.waitForIdle({ stableMs: 1200, timeoutMs: 60_000 });
+  // Ready as soon as the TUI is up: trust prompt, input line, or an
+  // in-flight turn. A session reattached MID-WORK (tmux survives server
+  // restarts, and turns can run for many minutes) must not block on idle —
+  // the screen watcher above signals the running turn right after `settled`.
+  const isUp = (scr: string) =>
+    /do you trust the files/i.test(scr) || screenShowsWork(scr) || scr.includes("❯");
+  let screen = await pilot.waitFor(isUp, { timeoutMs: 60_000 });
   if (/do you trust the files/i.test(screen)) {
     pilot.press("enter");
-    screen = await pilot.waitForIdle({ stableMs: 1200, timeoutMs: 30_000 });
+    await pilot.waitFor(
+      (scr) => screenShowsWork(scr) || scr.includes("❯"),
+      { timeoutMs: 30_000 },
+    );
   }
   settled = true;
   sessions.set(id, s);
