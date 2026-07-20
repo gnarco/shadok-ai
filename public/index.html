@@ -1154,10 +1154,12 @@
     return Math.floor(s / 60) + "m" + String(s % 60).padStart(2, "0");
   }
   /** (Re)starts the timer — called when a prompt leaves for this channel. */
-  function startTurnTimer(tab) {
-    tab.turnStart = Date.now();
+  function startTurnTimer(tab, startedAt) {
+    // The server's timestamp (when provided) survives page reloads and
+    // covers turns started by other clients.
+    tab.turnStart = startedAt || Date.now();
     tab.timerEl.classList.remove("done");
-    tab.timerEl.textContent = "0s";
+    tab.timerEl.textContent = fmtElapsed(Date.now() - tab.turnStart);
   }
   /** Freezes the timer; the final time stays dimmed until the next send. */
   function stopTurnTimer(tab) {
@@ -1546,7 +1548,7 @@
         // Another client may have resolved the pending dialog.
         retireChoices(t);
         // Covers turns started elsewhere (other client, dialog answer).
-        if (!t.turnStart) startTurnTimer(t);
+        if (!t.turnStart) startTurnTimer(t, msg.startedAt);
         setTabMood(t, "working");
         setTabState(t, "busy", "responding…");
         break;
