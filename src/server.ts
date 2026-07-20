@@ -305,6 +305,38 @@ async function finishTurn(s: Live) {
   }
 }
 
+/** The option number the ❯ cursor is currently on, or null. */
+function selectedOptionN(screen: string): number | null {
+  for (const l of screen.split("\n")) {
+    const m = l.match(/^\s*❯\s*(\d+)\.\s/);
+    if (m) return Number(m[1]);
+  }
+  return null;
+}
+
+/**
+ * Selects option `n` in a single-select dialog by moving the ❯ cursor with
+ * arrow keys, then Enter — the only reliable way for preview-style dialogs
+ * that ignore digit keys. Falls back to typing the digit if the cursor can't
+ * be read.
+ */
+async function selectOption(pilot: Pilot, n: number): Promise<void> {
+  for (let i = 0; i < 12; i++) {
+    const cur = selectedOptionN(pilot.screen());
+    if (cur === null) {
+      pilot.write(String(n)); // fallback: older digit-selectable dialogs
+      return;
+    }
+    if (cur === n) {
+      pilot.press("enter");
+      return;
+    }
+    pilot.press(cur < n ? "down" : "up");
+    await new Promise((r) => setTimeout(r, 160));
+  }
+  pilot.press("enter");
+}
+
 /**
  * Surfaces a dialog already on screen when a client connects — e.g. the
  * "resume from summary" or permission prompt that appears at startup/resume.
@@ -527,11 +559,13 @@ wss.on("connection", (ws: WebSocket) => {
         }
 
         case "choose": {
-          // Single select: the digit selects and validates.
+          // Single select. Preview-style dialogs ("Enter to select · ↑/↓ to
+          // navigate") ignore digit keys, so navigate the ❯ cursor to the
+          // target option with arrows, then Enter (works for all variants).
           if (!session) return fail("no session started");
           if (session.busy) return fail("a response is already in progress");
-          session.pilot.write(String(msg.n));
-          await sleep(800);
+          await selectOption(session.pilot, msg.n);
+          await sleep(500);
           await finishTurn(session);
           break;
         }
