@@ -181,6 +181,29 @@
     flex: none;
   }
   .tab .close:hover { color: var(--err); }
+  /* Per-channel turn timer (thinking time; final time stays dimmed). */
+  .tab .timer {
+    flex: none;
+    font-size: 11px;
+    color: var(--amber);
+    font-variant-numeric: tabular-nums;
+  }
+  .tab .timer.done { color: var(--text-dim); }
+  /* Channel states: working / waiting for an answer / unread response. */
+  .tab.working { background: var(--amber-soft); animation: breathe 1.6s ease-in-out infinite; }
+  .tab.needs-answer {
+    background: rgba(240, 168, 72, 0.28);
+    border-left-color: var(--amber);
+    border-radius: 0 4px 4px 0;
+    color: var(--text);
+  }
+  .tab.unread {
+    background: rgba(127, 201, 127, 0.14);
+    border-left-color: var(--ok);
+    border-radius: 0 4px 4px 0;
+    color: var(--text);
+  }
+  @media (prefers-reduced-motion: reduce) { .tab.working { animation: none; } }
   #newTab {
     margin-top: 8px;
     border: 1px dashed var(--line);
@@ -714,11 +737,14 @@
     name.className = "name";
     name.textContent = "channel " + seq;
     name.title = "Double-click to rename";
+    const timer = document.createElement("span");
+    timer.className = "timer";
+    timer.title = "Thinking time for the current turn";
     const close = document.createElement("span");
     close.className = "close";
     close.textContent = "×";
     close.title = "Close this channel";
-    btn.append(led, name, close);
+    btn.append(led, name, timer, close);
     tabbar.insertBefore(btn, newTabBtn);
 
     const tab = {
@@ -729,8 +755,9 @@
       cwd: "",
       sessionId: null,
       screenText: "",
+      turnStart: null,   // Date.now() while a turn's thinking timer runs
       transcriptEl: el,
-      btnEl: btn, ledEl: led, nameEl: name,
+      btnEl: btn, ledEl: led, nameEl: name, timerEl: timer,
     };
     btn.addEventListener("click", (e) => {
       if (e.target === close) closeTab(tab);
@@ -822,8 +849,43 @@
     if (tab === active) refreshChrome();
   }
 
+  /** Channel highlight: "working" | "needs-answer" | "unread" | null. */
+  function setTabMood(tab, mood) {
+    tab.btnEl.classList.toggle("working", mood === "working");
+    tab.btnEl.classList.toggle("needs-answer", mood === "needs-answer");
+    tab.btnEl.classList.toggle("unread", mood === "unread");
+  }
+
+  // ── Thinking timer (one per channel, shown in its tab) ──
+  function fmtElapsed(ms) {
+    const s = Math.floor(ms / 1000);
+    if (s < 60) return s + "s";
+    return Math.floor(s / 60) + "m" + String(s % 60).padStart(2, "0");
+  }
+  /** (Re)starts the timer — called when a prompt leaves for this channel. */
+  function startTurnTimer(tab) {
+    tab.turnStart = Date.now();
+    tab.timerEl.classList.remove("done");
+    tab.timerEl.textContent = "0s";
+  }
+  /** Freezes the timer; the final time stays dimmed until the next send. */
+  function stopTurnTimer(tab) {
+    if (tab.turnStart) {
+      tab.timerEl.textContent = fmtElapsed(Date.now() - tab.turnStart);
+      tab.turnStart = null;
+    }
+    tab.timerEl.classList.add("done");
+  }
+  setInterval(() => {
+    for (const t of tabs) {
+      if (t.turnStart) t.timerEl.textContent = fmtElapsed(Date.now() - t.turnStart);
+    }
+  }, 1000);
+
   function activate(tab) {
     active = tab;
+    // Viewing the channel clears its "unread response" highlight.
+    if (tab.btnEl.classList.contains("unread")) setTabMood(tab, null);
     tabs.forEach((t) => {
       t.btnEl.classList.toggle("active", t === tab);
       t.transcriptEl.hidden = t !== tab;
@@ -1039,6 +1101,7 @@
     (tab.pendingChoices || []).forEach((b) => (b.disabled = true));
     tab.pendingChoices = null;
     tab.dialogBubble = null;
+    if (tab.btnEl.classList.contains("needs-answer")) setTabMood(tab, null);
   }
 
   // ── Link ────────────────────────────────────────────────
@@ -1104,6 +1167,9 @@
       case "working":
         // Another client may have resolved the pending dialog.
         retireChoices(t);
+        // Covers turns started elsewhere (other client, dialog answer).
+        if (!t.turnStart) startTurnTimer(t);
+        setTabMood(t, "working");
         setTabState(t, "busy", "responding…");
         break;
       case "prompt-echo":
@@ -1130,11 +1196,15 @@
           localStorage.setItem("cp.session", msg.sessionId);
           persistChannels();
         }
+        stopTurnTimer(t);
+        setTabMood(t, t === active ? null : "unread");
         setTabState(t, "ready", "ready");
         break;
       case "dialog":
         // Re-rendered in place when a dialog is already shown (multi toggle).
         renderDialog(t, msg);
+        stopTurnTimer(t);
+        setTabMood(t, "needs-answer");
         setTabState(t, "ready", "choice pending");
         break;
       case "screen":
@@ -1143,14 +1213,22 @@
         break;
       case "error":
         addTurn(t, "system", "", "Error: " + msg.message);
-        if (t.status === "busy") setTabState(t, "ready", "ready");
+        if (t.status === "busy") {
+          stopTurnTimer(t);
+          setTabMood(t, null);
+          setTabState(t, "ready", "ready");
+        }
         break;
       case "exited":
         addTurn(t, "system", "", "The claude process exited (code " + msg.code + ").");
+        stopTurnTimer(t);
+        setTabMood(t, null);
         setTabState(t, "dead", "session ended");
         break;
       case "stopped":
         addTurn(t, "system", "", "Session closed cleanly.");
+        stopTurnTimer(t);
+        setTabMood(t, null);
         setTabState(t, "dead", "session ended");
         break;
     }
@@ -1223,6 +1301,8 @@
     const text = promptInput.value.trim();
     if (!text || t.status !== "ready" || t.pendingChoices || !t.ws) return;
     addTurn(t, "user", "pilot", text);
+    startTurnTimer(t);
+    setTabMood(t, "working");
     t.ws.send(JSON.stringify({ type: "prompt", text }));
     promptInput.value = "";
     promptInput.style.height = "auto";
