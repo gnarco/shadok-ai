@@ -580,6 +580,11 @@ wss.on("connection", (ws: WebSocket) => {
           if (!msg.force) {
             const verdict = paceBlock(await getUsage(), Date.now());
             if (verdict.blocked) return send({ type: "pace-blocked", reason: verdict.reason, text });
+            // The busy test above is now stale: a parked fire() (or another
+            // client's prompt) can have claimed the session while we awaited
+            // getUsage(). Submitting now would interleave two texts into one
+            // TUI. Mirrors the re-check fire() does after its own await.
+            if (session.busy) return fail("a response is already in progress");
           }
           // Getting here means the prompt is really being sent — that is the
           // takeover. A pending auto-retry (or pace pause) gives way to it.
