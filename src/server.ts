@@ -385,10 +385,24 @@ function maybeScheduleRetry(s: Live) {
     }
     // Never forced: an automatic turn must not spend quota the user is being
     // asked to hold back on. Park and re-test until the pace comes back down.
-    const verdict = paceBlock(await getUsage(), Date.now());
+    // A failed usage read must never block: paceBlock(null, …) reports
+    // "not blocked", so a rejection degrades to letting the retry through
+    // rather than wedging the chain on an unhandled rejection.
+    const verdict = paceBlock(await getUsage().catch(() => null), Date.now());
     // A takeover (or teardown) replaced or cleared our timer while we were
-    // fetching: this chain is no longer the live one, so stand down.
+    // fetching: this chain is no longer the live one, so stand down — and
+    // leave s.retryTimer alone, it now belongs to whoever replaced us.
     if (s.retryTimer !== mine) return;
+    // Still ours, but the session died or a turn started on its own while we
+    // were fetching (the screen watcher sets s.busy without touching
+    // s.retryTimer). Submitting `continue` now would spend quota on an
+    // already-running turn. Release our own already-fired handle, otherwise
+    // maybeScheduleRetry's `if (s.retryTimer) return` guard stays wedged for
+    // this session until something else happens to call clearRetry.
+    if (s.pilot.hasExited || s.busy) {
+      s.retryTimer = null;
+      return;
+    }
     if (verdict.blocked) {
       if (!held) {
         held = true;
