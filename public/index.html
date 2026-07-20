@@ -1199,7 +1199,18 @@
     if (dragTabEl || dragGroupEl) e.preventDefault();
   });
 
+  /** State line shown while the auto-continue waits for the pace to recover. */
+  const PACE_HOLD_STATE = "en attente du rythme";
+
   function setTabState(tab, status, text) {
+    // A pause of the auto-continue can end without a "pace-resumed": a takeover
+    // cancels the pending retry ("auto-retry-cancelled"), and the parked
+    // callback stands down silently when the turn started on its own
+    // ("working") or the session died ("exited"/"stopped"/"gone"). Every one of
+    // those paths sets the tab state, so hanging the pause indication on the
+    // state line — and dropping it here on any other transition — is what keeps
+    // it from being orphaned. No extra server message, no polling.
+    if (tab.paceHeld && text !== PACE_HOLD_STATE) tab.paceHeld = false;
     tab.status = status;
     tab.stateText = text;
     const ledClass = { setup: "", connecting: "busy", ready: "on", busy: "busy", dead: "off" }[status];
@@ -1909,6 +1920,11 @@
         setTabState(t, "ready", "auto-retry in " + Math.round(msg.delayMs / 1000) + " s");
         break;
       case "auto-retry-cancelled":
+        // A takeover ends a parked auto-continue too, and no "pace-resumed"
+        // follows — say so rather than leaving the pause line hanging.
+        if (t.paceHeld) {
+          addTurn(t, "system", "", "Auto-continue annulé — reprise manuelle.");
+        }
         setTabState(t, "ready", "ready");
         break;
       case "auto-retry-gave-up":
@@ -1916,6 +1932,36 @@
           "Transient API error persists after " + msg.attempts +
           " auto-retries — send a prompt to retry manually.");
         setTabMood(t, "needs-answer");
+        break;
+      case "pace-blocked":
+        // The client's own check was stale: roll back the optimistic turn state,
+        // then ask. The refusal lands *before* any "working" — the server checks
+        // the pace before it marks the session busy — so the tab is still
+        // "ready" here and what needs undoing is exactly what submitPrompt
+        // rendered ahead of the server: the turn timer and the working mood. A
+        // tab that really is "busy" is running a server-confirmed turn this
+        // refusal cannot belong to (a prompt sent during one is rejected as
+        // "already in progress"), so leave that one alone.
+        if (t.status !== "busy") {
+          stopTurnTimer(t);
+          setTabMood(t, null);
+          // A parked auto-continue is still parked: keep its line.
+          setTabState(t, "ready", t.paceHeld ? PACE_HOLD_STATE : "ready");
+        }
+        paceBlocked = true;
+        if (msg.reason) paceReason = msg.reason;
+        renderPaceConfirm(t, msg.text, msg.reason);
+        break;
+      case "pace-hold":
+        addTurn(t, "system", "",
+          "Auto-continue en pause — " + (msg.reason || "rythme dépassé") +
+          ". Reprise automatique dès le retour sous le seuil.");
+        setTabState(t, "ready", PACE_HOLD_STATE);
+        t.paceHeld = true;
+        break;
+      case "pace-resumed":
+        addTurn(t, "system", "", "Rythme revenu sous le seuil — auto-continue repris.");
+        setTabState(t, "ready", "ready");
         break;
     }
   }
@@ -1987,19 +2033,67 @@
     if (active && active.status === "setup") refreshLiveList();
   }, 5000);
 
+  function submitPrompt(t, text, force) {
+    closeActivity(t);
+    addTurn(t, "user", "pilot", text);
+    startTurnTimer(t);
+    setTabMood(t, "working");
+    t.ws.send(JSON.stringify({ type: "prompt", text, ...(force ? { force: true } : {}) }));
+    // The composer is shared and shows the active channel's draft. A forced send
+    // can come from a bubble in a channel the user has since left, and clearing
+    // it then would throw away whatever they are typing in the channel they are
+    // actually looking at.
+    if (t === active) {
+      promptInput.value = "";
+      promptInput.style.height = "auto";
+    }
+    dropDraft(t);
+  }
+
+  /**
+   * Above the ideal pace, ask before spending. Rendered in the thread like a TUI
+   * question rather than as a modal — the codebase has no floating dialog.
+   * Each blocked send asks again: forcing covers one message, never a session.
+   * Deliberately does NOT touch tab.dialogBubble or tab.pendingChoices: those
+   * belong to renderDialog, and borrowing them would corrupt a real TUI dialog
+   * and lock the composer.
+   */
+  function renderPaceConfirm(tab, text, reason) {
+    const turn = document.createElement("div");
+    turn.className = "turn claude dialog";
+    const label = document.createElement("span");
+    label.className = "label";
+    label.textContent = "claudepilot — rythme dépassé";
+    const bubble = document.createElement("div");
+    bubble.className = "bubble";
+    const q = document.createElement("div");
+    q.className = "question";
+    q.textContent = (reason || "Consommation au-dessus du rythme idéal")
+      + " — envoyer quand même ?";
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "choice";
+    btn.textContent = "Forcer l'envoi";
+    btn.addEventListener("click", () => {
+      if (tab.status !== "ready" || !tab.ws) return;
+      btn.disabled = true;
+      submitPrompt(tab, text, true);
+    });
+    bubble.append(q, btn);
+    turn.append(label, bubble);
+    tab.transcriptEl.appendChild(turn);
+    if (tab === active) tab.transcriptEl.scrollTop = tab.transcriptEl.scrollHeight;
+  }
+
   composer.addEventListener("submit", (e) => {
     e.preventDefault();
     const t = active;
     const text = promptInput.value.trim();
     if (!text || t.status !== "ready" || t.pendingChoices || !t.ws) return;
-    closeActivity(t);
-    addTurn(t, "user", "pilot", text);
-    startTurnTimer(t);
-    setTabMood(t, "working");
-    t.ws.send(JSON.stringify({ type: "prompt", text }));
-    promptInput.value = "";
-    promptInput.style.height = "auto";
-    dropDraft(t);
+    // Checked here so nothing is optimistically rendered before the server
+    // refuses. The server re-checks anyway — it is the authority.
+    if (paceBlocked) return renderPaceConfirm(t, text, paceReason);
+    submitPrompt(t, text);
   });
   promptInput.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
