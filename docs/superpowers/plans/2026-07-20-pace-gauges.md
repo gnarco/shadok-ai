@@ -532,7 +532,7 @@ git commit -m "feat(pace): met l'auto-continue en pause tant que le rythme est d
 ### Task 5: Jauges à deux barres
 
 **Files:**
-- Modify: `public/index.html:84-108` (CSS `.quota`), `public/index.html:748-757` (markup), `public/index.html:1888-1908` (`paintGauge` / `refreshUsage`)
+- Modify: `public/index.html:84-108` (CSS `.quota`), `public/index.html:748-757` (markup), `public/index.html:2076-2096` (`paintGauge` / `refreshUsage`)
 
 **Interfaces:**
 - Consumes: la réponse de `GET /usage` définie en Task 2.
@@ -631,7 +631,9 @@ par :
 
 - [ ] **Step 3: Réécrire `paintGauge` et `refreshUsage`**
 
-Remplacer les lignes 1888-1908 (de `function paintGauge` jusqu'à `setInterval(refreshUsage, 60_000);` inclus) :
+Remplacer les lignes 2076-2096 (de `function paintGauge` jusqu'à `setInterval(refreshUsage, 60_000);` inclus) :
+
+`paceBlocked` et `paceReason` sont déclarés ici mais lus par le composer, défini plus haut dans le fichier (ligne 1981). Sans effet : les deux ne sont lus qu'au moment d'un envoi ou d'un message serveur, bien après l'exécution du script.
 
 ```js
   /** Last verdict from /usage — read by the composer before sending. */
