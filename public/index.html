@@ -559,6 +559,9 @@
   .choice .num { color: var(--amber); font-family: var(--mono); font-size: 12px; }
   .choice .hint { color: var(--text-dim); font-size: 12.5px; }
   .choice:disabled { opacity: 0.45; }
+  /* A pace bubble superseded by a newer one, or already acted on. */
+  .turn.dialog.spent .bubble { border-color: var(--line); opacity: 0.5; }
+  .turn.dialog.spent .label { text-decoration: line-through; }
   .choice.chosen { border-color: var(--amber); color: var(--amber); opacity: 1; }
   .choice.checked { border-color: var(--amber); }
   .choice.checked .num { color: var(--amber); }
@@ -1938,19 +1941,31 @@
         // then ask. The refusal lands *before* any "working" — the server checks
         // the pace before it marks the session busy — so the tab is still
         // "ready" here and what needs undoing is exactly what submitPrompt
-        // rendered ahead of the server: the turn timer and the working mood. A
-        // tab that really is "busy" is running a server-confirmed turn this
-        // refusal cannot belong to (a prompt sent during one is rejected as
-        // "already in progress"), so leave that one alone.
-        if (t.status !== "busy") {
+        // rendered ahead of the server: the turn timer and the working mood.
+        // "ready" is therefore the *only* state this rollback may undo —
+        // submitPrompt starts the timer and sets the mood but never touches the
+        // tab state. Guarding on "!== busy" would also catch "dead": if the
+        // pilot exits while the server awaits getUsage(), "exited" marks the tab
+        // dead and this refusal would resurrect it as ready with a green LED,
+        // with no later message to correct it.
+        const rollback = t.status === "ready";
+        if (rollback) {
           stopTurnTimer(t);
-          setTabMood(t, null);
-          // A parked auto-continue is still parked: keep its line.
-          setTabState(t, "ready", t.paceHeld ? PACE_HOLD_STATE : "ready");
+          // Nothing here should overwrite a live state line: a parked
+          // auto-continue ("en attente du rythme") and a pending auto-retry
+          // ("auto-retry in N s") both outlive the refusal. submitPrompt never
+          // changed the text, so re-asserting the current one is the rollback.
+          setTabState(t, "ready", t.stateText);
         }
         paceBlocked = true;
         if (msg.reason) paceReason = msg.reason;
         renderPaceConfirm(t, msg.text, msg.reason);
+        // After the render: retiring the superseded bubble drops the highlight,
+        // so the new one has to re-raise it. A refusal is a question — when the
+        // user has moved to another channel the bubble lands in a hidden
+        // transcript, so flag it the way auto-retry-gave-up flags a channel
+        // waiting on the user.
+        if (rollback) setTabMood(t, t === active ? null : "needs-answer");
         break;
       case "pace-hold":
         addTurn(t, "system", "",
@@ -2034,6 +2049,9 @@
   }, 5000);
 
   function submitPrompt(t, text, force) {
+    // Any outstanding pace question is answered by the fact that something is
+    // being sent — whether by clicking its own button or by a fresh submit.
+    retirePaceConfirm(t);
     closeActivity(t);
     addTurn(t, "user", "pilot", text);
     startTurnTimer(t);
@@ -2051,6 +2069,25 @@
   }
 
   /**
+   * Stands the channel's pace question down: its button goes dead and the
+   * bubble is struck through, so the thread still shows the question was asked
+   * without leaving it answerable. Kept in tab.paceBubble — a field of its own,
+   * never tab.dialogBubble, which renderDialog re-renders TUI dialogs through.
+   */
+  function retirePaceConfirm(tab) {
+    const live = tab.paceBubble;
+    if (!live) return;
+    live.btn.disabled = true;
+    live.turn.classList.add("spent");
+    tab.paceBubble = null;
+    // Mirrors retireChoices, but must not steal the highlight of a real TUI
+    // dialog that is still waiting for an answer.
+    if (!tab.pendingChoices && tab.btnEl.classList.contains("needs-answer")) {
+      setTabMood(tab, null);
+    }
+  }
+
+  /**
    * Above the ideal pace, ask before spending. Rendered in the thread like a TUI
    * question rather than as a modal — the codebase has no floating dialog.
    * Each blocked send asks again: forcing covers one message, never a session.
@@ -2059,6 +2096,12 @@
    * and lock the composer.
    */
   function renderPaceConfirm(tab, text, reason) {
+    // At most one armed bubble per channel. Without this, a stale bubble stays
+    // clickable forever (clicking yesterday's resends yesterday's text forced),
+    // and two refusals then two quick clicks both clear the "ready" guard —
+    // the tab only turns busy when the server's "working" comes back — so two
+    // forced prompts leave, the second dying as "already in progress".
+    retirePaceConfirm(tab);
     const turn = document.createElement("div");
     turn.className = "turn claude dialog";
     const label = document.createElement("span");
@@ -2076,12 +2119,14 @@
     btn.textContent = "Forcer l'envoi";
     btn.addEventListener("click", () => {
       if (tab.status !== "ready" || !tab.ws) return;
-      btn.disabled = true;
+      // submitPrompt retires this bubble (disabling the button, marking it
+      // spent) — the single-live-bubble rule covers the click too.
       submitPrompt(tab, text, true);
     });
     bubble.append(q, btn);
     turn.append(label, bubble);
     tab.transcriptEl.appendChild(turn);
+    tab.paceBubble = { turn, btn };
     if (tab === active) tab.transcriptEl.scrollTop = tab.transcriptEl.scrollHeight;
   }
 
