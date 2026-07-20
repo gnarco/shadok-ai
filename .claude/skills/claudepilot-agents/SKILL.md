@@ -21,7 +21,7 @@ l'UI web (http://localhost:3789) — l'utilisateur peut suivre et intervenir.
 | Commande | Effet |
 |---|---|
 | `spawn [--cwd DIR] [--worktree] [--resume ID] [--continue]` | crée un agent → `{sessionId, cwd, branch}`. `--worktree` isole l'agent dans un worktree git (`~/.claudepilot/worktrees/`, branche `claudepilot/<tag>`) |
-| `prompt <id> "texte" [--timeout s]` | envoie un prompt, attend la fin du tour → `{status:"answer", text, tools}` ou `{status:"dialog", question, options, multi}` ou `{status:"timeout", screen}` |
+| `prompt <id> "texte" [--timeout s]` | envoie un prompt, attend la fin du tour → `{status:"answer", text, tools}` ou `{status:"dialog", question, options, multi}` ou `{status:"timeout", screen}` ou `{status:"pace-blocked", reason}` |
 | `dialog <id>` | interroge l'état → `{status:"idle"}` ou le dialog en attente |
 | `choose <id> <n>` | dialog single-select : choisit et valide l'option n |
 | `toggle <id> <n>` puis `confirm <id>` | dialog multi-select : coche/décoche puis soumet |
@@ -41,6 +41,9 @@ l'UI web (http://localhost:3789) — l'utilisateur peut suivre et intervenir.
    `answer` ou un nouveau `dialog` ;
 4. si `status:"timeout"` : le tour CONTINUE côté serveur — ne pas renvoyer
    le prompt ; re-vérifier plus tard avec `dialog <id>` ;
+4bis. si `status:"pace-blocked"` : RIEN n'a été envoyé — la consommation
+   dépasse le rythme idéal du quota (`reason` le détaille). Ne pas insister
+   en boucle ; en parler à l'utilisateur ;
 5. tâche finie : `diff <id>` et présenter les changements à l'utilisateur.
    La branche `claudepilot/<tag>` et son worktree ne sont JAMAIS mergés ni
    supprimés automatiquement — c'est l'utilisateur qui merge.
