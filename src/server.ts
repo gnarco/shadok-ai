@@ -11,6 +11,7 @@ import {
   listSessions,
   loadHistory,
 } from "./extract.js";
+import { findTransientErrors, newTransientErrors, RETRY_DELAYS_MS } from "./retry.js";
 import { ClaudePilot } from "./session.js";
 import { scanUsage, sessionFilePath, tailSession, type TokenUsage } from "./tail.js";
 import { getUsage } from "./usage.js";
@@ -104,6 +105,12 @@ interface Live {
   idleTimer: ReturnType<typeof setTimeout> | null;
   /** Token usage per assistant message id (final counts win), from the .jsonl. */
   usage: Map<string, TokenUsage>;
+  /** Pending auto-retry of a turn that died on a transient API error. */
+  retryTimer: ReturnType<typeof setTimeout> | null;
+  /** Auto-retry attempts consumed for the current error streak (0–3). */
+  retryCount: number;
+  /** Transient error lines already on screen when the turn started. */
+  errorsAtTurnStart: string[];
 }
 
 /** Session-wide token totals, for the window-title counter. */
@@ -140,6 +147,8 @@ function destroySession(s: Live) {
   s.screenTimer = null;
   if (s.idleTimer) clearTimeout(s.idleTimer);
   s.idleTimer = null;
+  if (s.retryTimer) clearTimeout(s.retryTimer);
+  s.retryTimer = null;
   s.stopTail?.();
   s.stopTail = null;
   s.pilot.kill();
@@ -182,6 +191,9 @@ async function createSession(
     idleTimer: null,
     // Resumed sessions start with what the transcript already consumed.
     usage: scanUsage(sessionFilePath(cwd, id)),
+    retryTimer: null,
+    retryCount: 0,
+    errorsAtTurnStart: [],
   };
   pilot.onExit((code) => {
     broadcast(s, { type: "exited", code });
@@ -230,15 +242,72 @@ async function createSession(
  */
 async function finishTurn(s: Live) {
   s.busy = true;
+  s.errorsAtTurnStart = findTransientErrors(s.pilot.screen());
   broadcast(s, { type: "working" });
   try {
     await s.pilot.waitForIdle({ stableMs: 2000, timeoutMs: 900_000 });
     const dialog = detectDialog(s.pilot.screen());
     if (dialog) broadcast(s, { type: "dialog", ...dialog });
-    else broadcast(s, { type: "turn-done", sessionId: s.id });
+    else {
+      broadcast(s, { type: "turn-done", sessionId: s.id });
+      maybeScheduleRetry(s);
+    }
   } finally {
     s.busy = false;
   }
+}
+
+/** Cancels a pending auto-retry (user took over, or session ends). */
+function clearRetry(s: Live, notify = false) {
+  if (!s.retryTimer) return;
+  clearTimeout(s.retryTimer);
+  s.retryTimer = null;
+  if (notify) broadcast(s, { type: "auto-retry-cancelled" });
+}
+
+/**
+ * If the turn died on a NEW transient API error (529 Overloaded, 5xx,
+ * timeout…), schedules an automatic `continue` — 15 s, then 30 s, then
+ * 60 s. Cancelled if the user takes over; gives up after 3 attempts.
+ */
+function maybeScheduleRetry(s: Live) {
+  if (s.retryTimer) return; // one pending retry at a time
+  const fresh = newTransientErrors(
+    s.errorsAtTurnStart,
+    findTransientErrors(s.pilot.screen()),
+  );
+  if (fresh.length === 0) {
+    s.retryCount = 0; // clean turn: the error streak is over
+    return;
+  }
+  if (s.retryCount >= RETRY_DELAYS_MS.length) {
+    broadcast(s, { type: "auto-retry-gave-up", attempts: s.retryCount });
+    s.retryCount = 0;
+    return;
+  }
+  const delayMs = RETRY_DELAYS_MS[s.retryCount];
+  s.retryCount++;
+  broadcast(s, {
+    type: "auto-retry",
+    delayMs,
+    attempt: s.retryCount,
+    max: RETRY_DELAYS_MS.length,
+  });
+  s.retryTimer = setTimeout(async () => {
+    s.retryTimer = null;
+    if (s.pilot.hasExited || s.busy) return;
+    broadcast(s, { type: "prompt-echo", text: "continue", auto: true });
+    s.busy = true;
+    broadcast(s, { type: "working" });
+    try {
+      await s.pilot.submit("continue");
+    } catch {
+      return; // TUI unreachable: give the user back the controls
+    } finally {
+      s.busy = false;
+    }
+    await finishTurn(s).catch(() => {});
+  }, delayMs);
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -265,6 +334,14 @@ wss.on("connection", (ws: WebSocket) => {
     }
 
     try {
+      // Any user takeover cancels a pending auto-retry and ends the streak.
+      if (
+        session &&
+        ["prompt", "choose", "toggle", "freetext", "confirm", "key"].includes(msg.type)
+      ) {
+        clearRetry(session, true);
+        session.retryCount = 0;
+      }
       switch (msg.type) {
         case "start": {
           if (session) return fail("session already started");

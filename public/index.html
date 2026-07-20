@@ -1551,8 +1551,9 @@
         setTabState(t, "busy", "responding…");
         break;
       case "prompt-echo":
-        // Prompt sent by another tab/interface on the same session.
-        addTurn(t, "user", "pilot (elsewhere)", msg.text);
+        // Prompt sent by another tab/interface — or by the server itself
+        // when it auto-retries a turn that died on a transient API error.
+        addTurn(t, "user", msg.auto ? "auto-retry" : "pilot (elsewhere)", msg.text);
         break;
       case "tokens":
         t.tokens = msg.tokens;
@@ -1624,6 +1625,22 @@
         stopTurnTimer(t);
         setTabMood(t, null);
         setTabState(t, "dead", "session ended");
+        break;
+      case "auto-retry":
+        // The server will resend "continue" by itself; nothing to do here.
+        addTurn(t, "system", "",
+          "Transient API error — auto-retry in " + Math.round(msg.delayMs / 1000) +
+          " s (attempt " + msg.attempt + "/" + msg.max + ")");
+        setTabState(t, "ready", "auto-retry in " + Math.round(msg.delayMs / 1000) + " s");
+        break;
+      case "auto-retry-cancelled":
+        setTabState(t, "ready", "ready");
+        break;
+      case "auto-retry-gave-up":
+        addTurn(t, "system", "",
+          "Transient API error persists after " + msg.attempts +
+          " auto-retries — send a prompt to retry manually.");
+        setTabMood(t, "needs-answer");
         break;
     }
   }
