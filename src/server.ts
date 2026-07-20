@@ -275,6 +275,16 @@ async function finishTurn(s: Live) {
   }
 }
 
+/**
+ * Surfaces a dialog already on screen when a client connects — e.g. the
+ * "resume from summary" or permission prompt that appears at startup/resume.
+ * Without this, a resumed session waiting on such a dialog looks frozen.
+ */
+function sendPendingDialog(s: Live, send: (msg: object) => void) {
+  const d = detectDialog(s.pilot.screen());
+  if (d) send({ type: "dialog", ...d });
+}
+
 /** Cancels a pending auto-retry (user took over, or session ends). */
 function clearRetry(s: Live, notify = false) {
   if (!s.retryTimer) return;
@@ -443,6 +453,7 @@ wss.on("connection", (ws: WebSocket) => {
               working: session.pilot.isWorking(),
             });
             if (session.busy) send({ type: "working" });
+            sendPendingDialog(session, send);
             break;
           }
 
@@ -459,6 +470,7 @@ wss.on("connection", (ws: WebSocket) => {
             branch: worktree?.branch ?? null,
           });
           send({ type: "tokens", tokens: tokenTotals(session) });
+          sendPendingDialog(session, send);
           break;
         }
 
