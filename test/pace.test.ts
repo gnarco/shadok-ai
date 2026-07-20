@@ -64,7 +64,7 @@ test("fenêtre expirée : le rythme idéal est borné à 100%", () => {
 test("paceBlock : une seule fenêtre au-dessus du seuil suffit", () => {
   const v = paceBlock(usage(win(90, 600), win(55, 6 * 86_400)), NOW);
   assert.equal(v.blocked, true);
-  assert.match(v.reason ?? "", /^7d /);
+  assert.match(v.reason ?? "", /^7d:/);
 });
 
 test("paceBlock : les deux dans les clous ne bloque pas", () => {
@@ -76,12 +76,12 @@ test("paceBlock : les deux dans les clous ne bloque pas", () => {
 test("paceBlock : la raison cite la fenêtre au ratio le plus élevé", () => {
   const v = paceBlock(usage(win(15, 17_700), win(55, 6 * 86_400)), NOW);
   assert.equal(v.blocked, true);
-  assert.match(v.reason ?? "", /^7d /); // 285% l'emporte sur 225%
+  assert.match(v.reason ?? "", /^7d:/); // 285% l'emporte sur 225%
 });
 
 test("paceBlock : la raison porte les trois chiffres", () => {
   const v = paceBlock(usage(null, win(55, 6 * 86_400)), NOW);
-  assert.equal(v.reason, "7d : 55% consommé pour un rythme idéal de 14% (285% du rythme)");
+  assert.equal(v.reason, "7d: 55% used vs 14% ideal pace (285% of pace)");
 });
 
 test("paceBlock : usage absent ne bloque jamais", () => {

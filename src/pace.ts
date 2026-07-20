@@ -61,6 +61,6 @@ export function paceBlock(u: Usage | null, nowMs: number): PaceVerdict {
   const r = Math.round;
   return {
     blocked: true,
-    reason: `${worst.label} : ${r(worst.used)}% consommé pour un rythme idéal de ${r(worst.pace)}% (${r(worst.ratio)}% du rythme)`,
+    reason: `${worst.label}: ${r(worst.used)}% used vs ${r(worst.pace)}% ideal pace (${r(worst.ratio)}% of pace)`,
   };
 }
