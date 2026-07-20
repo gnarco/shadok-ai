@@ -13,8 +13,11 @@ export interface TokenUsage {
 /** A streamed piece of an assistant turn, read from the session .jsonl. */
 export type TailEvent =
   | { kind: "text"; text: string }
-  | { kind: "tool"; name: string; summary: string }
-  | { kind: "result"; text: string; isError: boolean }
+  // `id`/`toolUseId` let a consumer pair an output with the call that produced
+  // it. Necessary because one assistant message may carry several tool_use
+  // blocks (parallel calls) whose results come back batched and out of order.
+  | { kind: "tool"; id: string; name: string; summary: string }
+  | { kind: "result"; toolUseId: string; text: string; isError: boolean }
   | { kind: "usage"; messageId: string; usage: TokenUsage };
 
 /** Max characters of a tool result to stream (long outputs are truncated). */
@@ -120,7 +123,12 @@ function emitLine(line: string, onEvent: (e: TailEvent) => void) {
       if (block?.type === "text" && typeof block.text === "string" && block.text.trim()) {
         onEvent({ kind: "text", text: block.text });
       } else if (block?.type === "tool_use" && typeof block.name === "string") {
-        onEvent({ kind: "tool", name: block.name, summary: toolSummary(block.input) });
+        onEvent({
+          kind: "tool",
+          id: typeof block.id === "string" ? block.id : "",
+          name: block.name,
+          summary: toolSummary(block.input),
+        });
       }
       // `thinking` blocks are intentionally skipped.
     }
@@ -130,7 +138,14 @@ function emitLine(line: string, onEvent: (e: TailEvent) => void) {
     for (const block of e.message.content) {
       if (block?.type !== "tool_result") continue;
       const text = resultText(block.content);
-      if (text) onEvent({ kind: "result", text, isError: !!block.is_error });
+      if (text) {
+        onEvent({
+          kind: "result",
+          toolUseId: typeof block.tool_use_id === "string" ? block.tool_use_id : "",
+          text,
+          isError: !!block.is_error,
+        });
+      }
     }
   }
 }

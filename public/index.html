@@ -344,9 +344,16 @@
     padding: 22px 22px 8px;
     display: flex;
     flex-direction: column;
-    gap: 14px;
   }
-  .turn { display: flex; flex-direction: column; gap: 4px; max-width: 82%; }
+  .turn { display: flex; flex-direction: column; gap: 4px; max-width: 82%; margin-top: 14px; }
+  .turn:first-child { margin-top: 0; }
+  /* An activity block sits closer to the text it belongs to than to the next turn. */
+  .turn.activity { margin-top: 8px; }
+  .turn.activity + .turn.claude { margin-top: 8px; }
+  .turn.system + .turn.system { margin-top: 4px; }
+  /* One speaker label per run of turns, not one per bubble. */
+  .turn.claude + .turn.claude:not(.dialog) > .label,
+  .turn.user + .turn.user > .label { display: none; }
   .turn.user { align-self: flex-end; align-items: flex-end; }
   .turn.claude { align-self: flex-start; }
   .bubble {
@@ -388,8 +395,11 @@
     font-size: 15px;
     color: var(--amber);
   }
+  .bubble.md h1:first-child, .bubble.md h2:first-child,
+  .bubble.md h3:first-child, .bubble.md h4:first-child { margin-top: 0; }
   .bubble.md ul, .bubble.md ol { margin: 6px 0 6px 22px; }
   .bubble.md li { margin: 3px 0; }
+  .bubble.md li > p { margin: 0; }
   .bubble.md code {
     font-family: var(--mono);
     font-size: 12.5px;
@@ -442,9 +452,25 @@
     font-style: italic;
     padding: 2px 0;
   }
-  /* Streamed tool-use activity line. */
-  .turn.tool-line { max-width: 82%; }
-  .turn.tool-line .bubble {
+  /* ── Activity block ──────────────────────────────────────
+     A run of tool calls between two pieces of assistant text. Folds at three
+     levels — output, same-tool run, whole block — each driven by data-folded.
+     Anything containing an error carries .has-err and never folds. */
+  .turn.activity { max-width: 82%; gap: 0; }
+  .act-body, .run-body, .item-out { display: flex; flex-direction: column; }
+  [data-folded="true"] > .act-body,
+  [data-folded="true"] > .run-body,
+  [data-folded="true"] > .item-out { display: none; }
+  /* A lone call needs no run header — it is its own row. */
+  .act-run[data-count="1"] > .run-head { display: none; }
+
+  /* Every fold toggle is a bare left-aligned mono line. */
+  .act-head, .run-head, .item-head {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    width: 100%;
+    text-align: left;
     background: none;
     border: none;
     border-left: 2px solid var(--line);
@@ -452,13 +478,34 @@
     color: var(--text-dim);
     font-family: var(--mono);
     font-size: 12px;
-    padding: 2px 0 2px 10px;
-    white-space: pre-wrap;
-    word-break: break-word;
+    letter-spacing: 0;
+    line-height: 1.5;
+    padding: 1px 0 1px 10px;
   }
-  /* Tool output block. */
-  .turn.result { max-width: 82%; gap: 0; }
-  .turn.result .result-body {
+  .act-head:hover, .run-head:hover, .item-head:hover {
+    color: var(--text);
+    border-left-color: var(--amber);
+  }
+  .act-head { color: var(--amber); }
+  .act-head .count { font-variant-numeric: tabular-nums; }
+  /* Tool name column, so a run of calls reads as a list rather than prose. */
+  .item-head .tool, .run-head .tool { flex: none; min-width: 62px; color: var(--text); }
+  .item-head .arg, .run-head .arg {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .caret { flex: none; font-size: 9px; opacity: 0.7; }
+  .run-body { padding-left: 12px; }
+  /* Inside a run the tool name is already in the header — don't repeat it. */
+  .act-run:not([data-count="1"]) .item-head .tool { display: none; }
+  .item-head .err-flag { flex: none; color: var(--err); }
+  .has-err > .item-head, .has-err > .run-head { border-left-color: var(--err); }
+
+  /* Tool output. */
+  .result-body {
     background: var(--bg-inset);
     border: 1px solid var(--line);
     border-left: 2px solid var(--text-dim);
@@ -468,19 +515,19 @@
     font-size: 11.5px;
     line-height: 1.4;
     padding: 8px 10px;
-    margin: 0;
+    margin: 2px 0 2px 10px;
     white-space: pre-wrap;
     word-break: break-word;
     overflow-x: auto;
   }
-  .turn.result.err .result-body { border-left-color: var(--err); color: var(--err); }
+  .has-err > .item-out > .result-body { border-left-color: var(--err); color: var(--err); }
   .result-more {
     align-self: flex-start;
     border: none;
     background: none;
     color: var(--amber);
     font-size: 11px;
-    padding: 3px 0 0 10px;
+    padding: 0 0 2px 10px;
   }
   .result-more:hover { text-decoration: underline; }
 
@@ -603,8 +650,17 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  .recover-row .rsub { font-family: var(--mono); font-size: 11px; color: var(--text-dim); }
+  .recover-row .rsub {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-dim);
+    /* Long worktree paths must ellipsize, not push the badge over the text. */
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
   .recover-row .badge {
+    flex: none;
     font-family: var(--mono);
     font-size: 10px;
     padding: 1px 6px;
@@ -743,6 +799,10 @@
         <span>Isolate in a git worktree <span class="check-hint">— the agent edits a fresh branch; review &amp; merge from the Diff panel (new sessions only)</span></span>
       </label>
       <button class="primary" id="startBtn">Start session</button>
+      <div class="field" id="liveField" hidden>
+        <span class="label">Agents running now</span>
+        <div class="recover-list" id="liveList"></div>
+      </div>
       <div class="field" id="recoverField" hidden>
         <span class="label">Reopen an unfinished session</span>
         <div class="recover-list" id="recoverList"></div>
@@ -1161,13 +1221,17 @@
     tab.timerEl.classList.remove("done");
     tab.timerEl.textContent = fmtElapsed(Date.now() - tab.turnStart);
   }
+  /** Shows a finished turn's duration, dimmed, until the next send. */
+  function showFrozenTime(tab, ms) {
+    tab.timerEl.textContent = fmtElapsed(ms);
+    tab.timerEl.classList.add("done");
+  }
   /** Freezes the timer; the final time stays dimmed until the next send. */
   function stopTurnTimer(tab) {
     if (tab.turnStart) {
-      tab.timerEl.textContent = fmtElapsed(Date.now() - tab.turnStart);
+      showFrozenTime(tab, Date.now() - tab.turnStart);
       tab.turnStart = null;
-    }
-    tab.timerEl.classList.add("done");
+    } else tab.timerEl.classList.add("done");
   }
   setInterval(() => {
     for (const t of tabs) {
@@ -1243,6 +1307,7 @@
       if (last && !$("resumeInput").value) $("resumeInput").value = last;
       $("startBtn").disabled = false;
       refreshRecoverList();
+      refreshLiveList();
     }
   }
 
@@ -1271,42 +1336,196 @@
     return bubble;
   }
 
-  /** A compact "used a tool" activity line during streaming. */
-  function addToolLine(tab, name, summary) {
+  /* ── Activity log ────────────────────────────────────────
+     Tool traffic is grouped instead of stacked. A *block* is a run of tool
+     events between two pieces of assistant text; inside it, consecutive calls
+     to the same tool condense into a *run*; each call hides its own output.
+     At turn-done every block folds — except any that saw an error.
+
+     All fold state lives on `tab.act` (current block) and `tab.turnBlocks`
+     (blocks awaiting the end-of-turn fold). */
+
+  /** Lines of tool output shown before "+ N more lines". */
+  const RESULT_LINES = 12;
+
+  function setFolded(el, folded) {
+    el.dataset.folded = folded ? "true" : "false";
+    const caret = el.querySelector(":scope > .act-head > .caret, :scope > .run-head > .caret, :scope > .item-head > .caret");
+    if (caret) caret.textContent = folded ? "▸" : "▾";
+  }
+
+  function toggleFold(el) {
+    setFolded(el, el.dataset.folded !== "true");
+  }
+
+  /** Marks an element and its ancestors up to the block as containing an error. */
+  function flagError(el) {
+    for (let n = el; n; n = n.parentElement?.closest(".act-run, .turn.activity")) {
+      n.classList.add("has-err");
+      if (n.classList.contains("turn")) break;
+    }
+  }
+
+  /** Opens a fresh activity block at the bottom of the transcript. */
+  function openBlock(tab) {
     const turn = document.createElement("div");
-    turn.className = "turn claude tool-line";
-    const bubble = document.createElement("div");
-    bubble.className = "bubble";
-    bubble.textContent = "→ " + name + (summary ? "  " + summary : "");
-    turn.appendChild(bubble);
+    turn.className = "turn claude activity";
+    turn.dataset.folded = "false";
+    const head = document.createElement("button");
+    head.className = "act-head";
+    head.innerHTML = '<span class="caret">▾</span><span class="count"></span>';
+    head.addEventListener("click", () => toggleFold(turn));
+    const body = document.createElement("div");
+    body.className = "act-body";
+    turn.append(head, body);
     tab.transcriptEl.appendChild(turn);
+    const block = { el: turn, body, countEl: head.querySelector(".count"), calls: 0, errors: 0, run: null };
+    tab.act = block;
+    (tab.turnBlocks ||= []).push(block);
+    return block;
+  }
+
+  function renderBlockCount(block) {
+    const ops = block.calls + (block.calls === 1 ? " operation" : " operations");
+    block.countEl.textContent = block.errors ? ops + " · " + block.errors + " error" + (block.errors > 1 ? "s" : "") : ops;
+  }
+
+  /** Ends the current block so the next tool call starts a new one. */
+  function closeActivity(tab) {
+    tab.act = null;
+  }
+
+  /** Folds every block of the finished turn that saw no error. */
+  function sealTurn(tab) {
+    for (const block of tab.turnBlocks || []) {
+      if (!block.el.classList.contains("has-err")) setFolded(block.el, true);
+    }
+    tab.turnBlocks = [];
+    tab.pendingCalls?.clear();
+    tab.lastCall = null;
+    closeActivity(tab);
+  }
+
+  /** A tool call: appended to the open block, condensed into a run if repeated. */
+  function addToolLine(tab, msg) {
+    const block = tab.act || openBlock(tab);
+    const name = msg.name || "tool";
+
+    if (!block.run || block.run.name !== name) {
+      const runEl = document.createElement("div");
+      runEl.className = "act-run";
+      runEl.dataset.folded = "false";
+      runEl.dataset.count = "1";
+      const head = document.createElement("button");
+      head.className = "run-head";
+      head.innerHTML = '<span class="caret">▾</span><span class="tool"></span><span class="arg"></span>';
+      head.querySelector(".tool").textContent = name;
+      head.addEventListener("click", () => toggleFold(runEl));
+      const body = document.createElement("div");
+      body.className = "run-body";
+      runEl.append(head, body);
+      block.body.appendChild(runEl);
+      block.run = { name, el: runEl, body, argEl: head.querySelector(".arg"), count: 0 };
+    }
+    const run = block.run;
+    run.count += 1;
+    run.el.dataset.count = String(run.count);
+    run.argEl.textContent = "×" + run.count;
+    // A repeated tool folds away; the reader opens it if the detail matters.
+    if (run.count === 2 && !run.el.classList.contains("has-err")) setFolded(run.el, true);
+
+    const item = document.createElement("div");
+    item.className = "act-item";
+    item.dataset.folded = "true";
+    const head = document.createElement("button");
+    head.className = "item-head";
+    head.innerHTML = '<span class="caret">▸</span><span class="tool"></span><span class="arg"></span>';
+    head.querySelector(".tool").textContent = name;
+    head.querySelector(".arg").textContent = msg.summary || "";
+    head.addEventListener("click", () => toggleFold(item));
+    const out = document.createElement("div");
+    out.className = "item-out";
+    item.append(head, out);
+    run.body.appendChild(item);
+
+    block.calls += 1;
+    renderBlockCount(block);
+    (tab.pendingCalls ||= new Map()).set(msg.id || "", item);
+    tab.lastCall = item;
     if (tab === active) tab.transcriptEl.scrollTop = tab.transcriptEl.scrollHeight;
   }
 
-  /** Tool output (command result / file read), collapsible when long. */
-  function addResult(tab, text, isError) {
-    const turn = document.createElement("div");
-    turn.className = "turn claude result" + (isError ? " err" : "");
+  /**
+   * Tool output, attached to the call that produced it. Paired by id because
+   * one assistant message may fire several tools at once and their results come
+   * back batched — position alone would mismatch them.
+   */
+  function addResult(tab, msg) {
+    const pending = tab.pendingCalls;
+    let item = msg.toolUseId && pending ? pending.get(msg.toolUseId) : null;
+    if (item) pending.delete(msg.toolUseId);
+    // No id (older server, or an unpaired result): fall back to the last call.
+    else item = tab.lastCall;
+    if (!item || item.querySelector(":scope > .item-out > .result-body")) {
+      // Nothing to attach to — show it on its own rather than dropping it.
+      item = null;
+    }
+    const host = item ? item.querySelector(":scope > .item-out") : orphanItem(tab);
+    const text = msg.text || "";
+
     const pre = document.createElement("pre");
-    pre.className = "bubble result-body";
+    pre.className = "result-body";
     const lines = text.split("\n");
-    const long = lines.length > 12;
-    pre.textContent = long ? lines.slice(0, 12).join("\n") : text;
-    turn.appendChild(pre);
+    const long = lines.length > RESULT_LINES;
+    const head = () => lines.slice(0, RESULT_LINES).join("\n");
+    pre.textContent = long ? head() : text;
+    host.appendChild(pre);
     if (long) {
       const more = document.createElement("button");
       more.className = "result-more";
-      more.textContent = "+ " + (lines.length - 12) + " more lines";
+      const label = () => "+ " + (lines.length - RESULT_LINES) + " more lines";
+      more.textContent = label();
       let expanded = false;
       more.addEventListener("click", () => {
         expanded = !expanded;
-        pre.textContent = expanded ? text : lines.slice(0, 12).join("\n");
-        more.textContent = expanded ? "− collapse" : "+ " + (lines.length - 12) + " more lines";
+        pre.textContent = expanded ? text : head();
+        more.textContent = expanded ? "− collapse" : label();
       });
-      turn.appendChild(more);
+      host.appendChild(more);
     }
-    tab.transcriptEl.appendChild(turn);
+
+    const target = item || host.closest(".act-item");
+    if (msg.isError) {
+      // Failures stay in the clear: unfolded here, and exempt from turn-done.
+      flagError(target);
+      setFolded(target, false);
+      const run = target.closest(".act-run");
+      if (run) setFolded(run, false);
+      const block = tab.act;
+      if (block) {
+        block.errors += 1;
+        renderBlockCount(block);
+      }
+    }
     if (tab === active) tab.transcriptEl.scrollTop = tab.transcriptEl.scrollHeight;
+  }
+
+  /** A result with no matching call still deserves a row of its own. */
+  function orphanItem(tab) {
+    const block = tab.act || openBlock(tab);
+    const item = document.createElement("div");
+    item.className = "act-item";
+    item.dataset.folded = "false";
+    const head = document.createElement("button");
+    head.className = "item-head";
+    head.innerHTML = '<span class="caret">▾</span><span class="tool">output</span><span class="arg"></span>';
+    head.addEventListener("click", () => toggleFold(item));
+    const out = document.createElement("div");
+    out.className = "item-out";
+    item.append(head, out);
+    block.body.appendChild(item);
+    block.run = null;
+    return out;
   }
 
   /**
@@ -1446,6 +1665,50 @@
     ws.addEventListener("message", (ev) => handleMessage(t, JSON.parse(ev.data)));
   }
 
+  /**
+   * Lists the agents alive in the server right now — including ones spawned
+   * outside this browser (pilotctl, another tab). They have no transcript
+   * before their first turn, so no other list can surface them. Attaching
+   * shares the same process rather than starting a second one.
+   */
+  async function refreshLiveList() {
+    const field = $("liveField");
+    const listEl = $("liveList");
+    let live = [];
+    try {
+      live = await (await fetch("/live")).json();
+    } catch { live = []; }
+    if (!Array.isArray(live) || live.length === 0) { field.hidden = true; return; }
+    field.hidden = false;
+    listEl.innerHTML = "";
+    for (const s of live) {
+      const row = document.createElement("div");
+      row.className = "recover-row";
+      const meta = document.createElement("div");
+      meta.className = "rmeta";
+      const p = document.createElement("div");
+      p.className = "rprompt";
+      p.textContent = s.lastPrompt || "(no prompt yet)";
+      const sub = document.createElement("div");
+      sub.className = "rsub";
+      // Id first: it is what identifies the agent, and truncation eats the tail.
+      sub.textContent = s.id.slice(0, 8) + " · " + (s.branch || s.cwd);
+      meta.append(p, sub);
+      const badge = document.createElement("span");
+      badge.className = "badge" + (s.busy ? "" : " empty");
+      badge.textContent = s.busy ? "working" : (s.clients ? "idle" : "detached");
+      const btn = document.createElement("button");
+      btn.textContent = "Attach";
+      btn.addEventListener("click", () => {
+        const t = active;
+        if (!t.customName) { t.customName = true; t.nameEl.textContent = s.id.slice(0, 8); }
+        launchTab(t, { resume: s.id, cwd: s.cwd });
+      });
+      row.append(meta, badge, btn);
+      listEl.appendChild(row);
+    }
+  }
+
   /** Lists past worktree sessions of the setup's repo, each reopenable. */
   async function refreshRecoverList() {
     const cwd = $("cwdInput").value.trim();
@@ -1541,6 +1804,9 @@
         }
         setTabState(t, "ready", "ready");
         persistChannels();
+        // Reattaching between turns: restore the last turn's time rather than
+        // leaving a blank timer. A "working" message right after overrides it.
+        if (msg.lastTurnMs) showFrozenTime(t, msg.lastTurnMs);
         addTurn(t, "system", "", "Session established. The pilot has the controls.");
         if (t === active) promptInput.focus();
         break;
@@ -1555,6 +1821,7 @@
       case "prompt-echo":
         // Prompt sent by another tab/interface — or by the server itself
         // when it auto-retries a turn that died on a transient API error.
+        closeActivity(t);
         addTurn(t, "user", msg.auto ? "auto-retry" : "pilot (elsewhere)", msg.text);
         break;
       case "tokens":
@@ -1563,19 +1830,24 @@
         break;
       case "stream-text":
         // A complete assistant text block, streamed from the transcript.
+        // Text ends the current activity block: the next tool call opens a new
+        // one, so the transcript keeps the real text/tools interleaving.
         retireChoices(t);
+        closeActivity(t);
         addTurn(t, "claude", "claude", msg.text, "live");
         break;
       case "stream-tool":
-        // A tool call, shown as a compact activity line.
-        addToolLine(t, msg.name, msg.summary);
+        // A tool call, grouped into the open activity block.
+        addToolLine(t, msg);
         break;
       case "stream-result":
-        // Tool output (command result, file read…).
-        addResult(t, msg.text, msg.isError);
+        // Tool output, attached to the call it belongs to.
+        addResult(t, msg);
         break;
       case "turn-done":
         retireChoices(t);
+        // Activity recedes now the turn is over — errors excepted.
+        sealTurn(t);
         if (msg.sessionId && msg.sessionId !== t.sessionId) {
           t.sessionId = msg.sessionId;
           localStorage.setItem("cp.session", msg.sessionId);
@@ -1587,6 +1859,7 @@
         break;
       case "dialog":
         // Re-rendered in place when a dialog is already shown (multi toggle).
+        closeActivity(t);
         renderDialog(t, msg);
         stopTurnTimer(t);
         setTabMood(t, "needs-answer");
@@ -1708,12 +1981,18 @@
     if (!$("resumeField").hidden) refreshSessionList();
     refreshRecoverList();
   });
+  // Agents can appear while the setup screen sits open (pilotctl spawns one,
+  // another tab starts one) — keep the list current without a reload.
+  setInterval(() => {
+    if (active && active.status === "setup") refreshLiveList();
+  }, 5000);
 
   composer.addEventListener("submit", (e) => {
     e.preventDefault();
     const t = active;
     const text = promptInput.value.trim();
     if (!text || t.status !== "ready" || t.pendingChoices || !t.ws) return;
+    closeActivity(t);
     addTurn(t, "user", "pilot", text);
     startTurnTimer(t);
     setTabMood(t, "working");
