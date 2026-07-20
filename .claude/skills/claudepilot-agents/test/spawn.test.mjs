@@ -8,7 +8,7 @@ import { startMockServer } from "./mock-server.mjs";
 process.env.CLAUDEPILOT_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "pilotctl-test-"));
 process.env.CLAUDEPILOT_NO_HOLDER = "1";
 process.env.CLAUDEPILOT_NO_AUTOSTART = "1";
-const { run, readState } = await import("../pilotctl.mjs");
+const { run, readState, writeState } = await import("../pilotctl.mjs");
 
 test("spawn démarre une session et écrit l'état local", async () => {
   const mock = await startMockServer({
@@ -24,6 +24,28 @@ test("spawn démarre une session et écrit l'état local", async () => {
     const st = readState("abc-123");
     assert.equal(st.cwd, "/tmp/x");
     assert.equal(st.branch, "claudepilot/abc123");
+  } finally {
+    await mock.close();
+  }
+});
+
+test("spawn --resume conserve branch/baseSha existants quand le serveur n'en renvoie pas", async () => {
+  const mock = await startMockServer({
+    start: [{ type: "ready", sessionId: "abc-123", cwd: "/tmp/x" }],
+  });
+  process.env.CLAUDEPILOT_PORT = String(mock.port);
+  writeState("abc-123", {
+    sessionId: "abc-123",
+    cwd: "/tmp/x",
+    branch: "claudepilot/abc123",
+    baseSha: "deadbeef",
+    holderPid: null,
+  });
+  try {
+    await run(["spawn", "--resume", "abc-123", "--cwd", "/tmp/x"]);
+    const st = readState("abc-123");
+    assert.equal(st.branch, "claudepilot/abc123");
+    assert.equal(st.baseSha, "deadbeef");
   } finally {
     await mock.close();
   }

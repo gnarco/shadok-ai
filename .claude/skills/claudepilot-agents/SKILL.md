@@ -59,6 +59,10 @@ en arrière-plan simultanément.
   response is already in progress » : attendre avec `dialog <id>`.
 - Si un agent semble bloqué sur un état que les dialogs ne couvrent pas,
   regarder `screen <id>` (équivalent de l'« engine room » de l'UI).
+- Pour reprendre une session existante (`spawn --resume <id>`), toujours passer
+  `--cwd` avec le répertoire de la session (le serveur retomberait sinon sur
+  son propre cwd) ; pour un agent déjà piloté, l'état local fournit ce cwd
+  automatiquement.
 
 ## Mécanique (pour le debug)
 

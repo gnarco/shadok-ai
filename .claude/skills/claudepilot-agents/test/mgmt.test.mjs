@@ -69,6 +69,28 @@ test("diff retombe sur git local quand la session n'est plus live", async () => 
   }
 });
 
+test("diff fallback inclut les fichiers non suivis", async () => {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), "pilotctl-repo-"));
+  const git = (...a) => execFileSync("git", ["-C", repo, ...a], { encoding: "utf8" });
+  git("init", "-q");
+  git("config", "user.email", "t@t");
+  git("config", "user.name", "t");
+  git("commit", "-qm", "init", "--allow-empty");
+  const baseSha = git("rev-parse", "HEAD").trim();
+  fs.writeFileSync(path.join(repo, "hello.txt"), "hello world\n");
+
+  const mock = await startMockServer(); // /diff répond "no such session"
+  process.env.CLAUDEPILOT_PORT = String(mock.port);
+  writeState("untracked", { sessionId: "untracked", cwd: repo, baseSha, branch: "claudepilot/u" });
+  try {
+    const r = await run(["diff", "untracked"]);
+    assert.equal(r.fallback, true);
+    assert.match(r.diff, /\+hello world/);
+  } finally {
+    await mock.close();
+  }
+});
+
 test("stop sans holder vivant nettoie l'état sans rattacher", async () => {
   const mock = await startMockServer();
   process.env.CLAUDEPILOT_PORT = String(mock.port);

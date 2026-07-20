@@ -228,7 +228,15 @@ async function cmdSpawn(flags) {
       baseSha = execFileSync("git", ["-C", cwd, "rev-parse", "HEAD"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
     } catch {}
   }
-  writeState(sessionId, { sessionId, cwd, branch: branch ?? null, baseSha, holderPid: null });
+  const prev = readState(sessionId) ?? {};
+  writeState(sessionId, {
+    ...prev,
+    sessionId,
+    cwd,
+    branch: branch ?? prev.branch ?? null,
+    baseSha: baseSha ?? prev.baseSha ?? null,
+    holderPid: prev.holderPid ?? null,
+  });
   await ensureHolder(sessionId, cwd);
   client.ws.close();
   return { sessionId, cwd, branch: branch ?? null };
@@ -296,9 +304,25 @@ async function cmdDiff(id) {
   if (!st?.cwd) throw new Error(`no live session and no local state for ${id}`);
   const git = (args) =>
     execFileSync("git", ["-C", st.cwd, ...args], { encoding: "utf8" }).trimEnd();
+  let diff = git(["diff", st.baseSha ?? "HEAD"]);
+  // Include untracked files (diff doesn't show them) — mirrors gitDiff in src/worktree.ts.
+  const untracked = git(["ls-files", "--others", "--exclude-standard"])
+    .split("\n")
+    .filter(Boolean);
+  if (untracked.length) {
+    const shown = untracked.map((f) => {
+      try {
+        return git(["diff", "--no-index", "/dev/null", f]);
+      } catch (e) {
+        // --no-index exits non-zero when files differ; its stdout has the diff.
+        return e?.stdout ? String(e.stdout).trimEnd() : `+++ ${f} (untracked)`;
+      }
+    });
+    diff = [diff, ...shown].filter(Boolean).join("\n");
+  }
   return {
     status: git(["status", "--short"]),
-    diff: git(["diff", st.baseSha ?? "HEAD"]),
+    diff,
     branch: st.branch ?? null,
     fallback: true,
   };
