@@ -39,6 +39,23 @@ app.get("/sessions", (req, res) => {
   const cwd = String(req.query.cwd ?? "").trim() || process.cwd();
   res.json(listSessions(cwd));
 });
+// Sessions alive in THIS server (agents spawned by any client, including the
+// pilotctl thin client). They own no transcript until their first turn, so
+// /sessions cannot see them — this is the only way the UI can list them.
+app.get("/live", (_req, res) => {
+  res.json(
+    [...sessions.values()]
+      .filter((s) => !s.pilot.hasExited)
+      .map((s) => ({
+        id: s.id,
+        cwd: s.cwd,
+        branch: s.worktree?.branch ?? null,
+        busy: s.busy,
+        clients: s.clients.size,
+        lastPrompt: s.lastPrompt,
+      })),
+  );
+});
 // Current 5-hour and 7-day subscription usage (for the quota gauges).
 app.get("/usage", async (_req, res) => {
   res.json((await getUsage()) ?? { fiveHour: null, sevenDay: null, fetchedAt: Date.now() });
@@ -223,11 +240,18 @@ async function createSession(
   // never truncated, at message granularity.
   s.stopTail = tailSession(sessionFilePath(cwd, id), (e) => {
     if (e.kind === "text") broadcast(s, { type: "stream-text", text: e.text });
-    else if (e.kind === "tool") broadcast(s, { type: "stream-tool", name: e.name, summary: e.summary });
+    else if (e.kind === "tool")
+      broadcast(s, { type: "stream-tool", id: e.id, name: e.name, summary: e.summary });
     else if (e.kind === "usage") {
       s.usage.set(e.messageId, e.usage);
       broadcast(s, { type: "tokens", tokens: tokenTotals(s) });
-    } else broadcast(s, { type: "stream-result", text: e.text, isError: e.isError });
+    } else
+      broadcast(s, {
+        type: "stream-result",
+        toolUseId: e.toolUseId,
+        text: e.text,
+        isError: e.isError,
+      });
   });
   let settled = false;
   s.screenTimer = setInterval(() => {
