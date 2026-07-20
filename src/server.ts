@@ -15,7 +15,8 @@ import { findTransientErrors, newTransientErrors, RETRY_DELAYS_MS } from "./retr
 import { ClaudePilot } from "./session.js";
 import { TmuxPilot, tmuxAvailable } from "./tmux.js";
 import { scanUsage, sessionFilePath, tailSession, type TokenUsage } from "./tail.js";
-import { getUsage } from "./usage.js";
+import { computePace, paceBlock, WINDOW_SEC } from "./pace.js";
+import { getUsage, type Window } from "./usage.js";
 import {
   createWorktree,
   ensureWorktreeCheckout,
@@ -56,9 +57,21 @@ app.get("/live", (_req, res) => {
       })),
   );
 });
-// Current 5-hour and 7-day subscription usage (for the quota gauges).
+// Current 5-hour and 7-day subscription usage, each window enriched with how it
+// compares to the time already elapsed (for the quota gauges and the send guard).
 app.get("/usage", async (_req, res) => {
-  res.json((await getUsage()) ?? { fiveHour: null, sevenDay: null, fetchedAt: Date.now() });
+  const u = await getUsage();
+  const now = Date.now();
+  // The pace is derived per request, not per fetch: getUsage() caches for 60 s
+  // and a frozen pace would drift away from the clock.
+  const enrich = (w: Window | null, durationSec: number) =>
+    w ? { ...w, ...computePace(w, durationSec, now) } : null;
+  res.json({
+    fiveHour: enrich(u?.fiveHour ?? null, WINDOW_SEC.fiveHour),
+    sevenDay: enrich(u?.sevenDay ?? null, WINDOW_SEC.sevenDay),
+    fetchedAt: u?.fetchedAt ?? now,
+    ...paceBlock(u, now),
+  });
 });
 // Changes made by a session (git status + diff), for the review panel.
 app.get("/diff", (req, res) => {
