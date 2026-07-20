@@ -173,20 +173,23 @@ export async function ensureHolder(id, cwd) {
     stdio: ["ignore", "pipe", "ignore"],
     env: process.env,
   });
-  await new Promise((resolve, reject) => {
-    const t = setTimeout(() => reject(new Error("holder failed to attach within 90s")), 90_000);
-    child.stdout.on("data", (d) => {
-      if (String(d).includes("attached")) {
+  try {
+    await new Promise((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error("holder failed to attach within 90s")), 90_000);
+      child.stdout.on("data", (d) => {
+        if (String(d).includes("attached")) {
+          clearTimeout(t);
+          resolve();
+        }
+      });
+      child.once("exit", () => {
         clearTimeout(t);
-        resolve();
-      }
+        reject(new Error("holder exited before attaching"));
+      });
     });
-    child.once("exit", () => {
-      clearTimeout(t);
-      reject(new Error("holder exited before attaching"));
-    });
-  });
-  child.unref();
+  } finally {
+    child.unref();
+  }
   writeState(id, { ...(readState(id) ?? { sessionId: id }), cwd: cwd ?? null, holderPid: child.pid });
 }
 
@@ -202,7 +205,7 @@ async function cmdSpawn(flags) {
   let baseSha = null;
   if (branch) {
     try {
-      baseSha = execFileSync("git", ["-C", cwd, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+      baseSha = execFileSync("git", ["-C", cwd, "rev-parse", "HEAD"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
     } catch {}
   }
   writeState(sessionId, { sessionId, cwd, branch: branch ?? null, baseSha, holderPid: null });
