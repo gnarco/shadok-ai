@@ -116,3 +116,19 @@ test("screen retourne le dernier screen reçu", async () => {
     await mock.close();
   }
 });
+
+test("stop avec holder vivant mais session morte nettoie et rapporte stopped:false", async () => {
+  const mock = await startMockServer({
+    start: [{ type: "error", message: "no session" }],
+  });
+  process.env.CLAUDEPILOT_PORT = String(mock.port);
+  writeState("zombie", { sessionId: "zombie", cwd: "/tmp/x", holderPid: process.pid });
+  try {
+    const r = await run(["stop", "zombie"]);
+    assert.equal(r.stopped, false);
+    assert.match(r.note, /not reattachable/);
+    assert.equal(readState("zombie"), null);
+  } finally {
+    await mock.close();
+  }
+});

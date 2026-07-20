@@ -314,10 +314,28 @@ async function cmdStop(id) {
     deleteState(id);
     return { stopped: false, sessionId: id, note: "no live holder; local state cleared" };
   }
-  const client = await openSession({ resume: id, cwd: st?.cwd ?? undefined });
+  let client;
+  try {
+    client = await openSession({ resume: id, cwd: st?.cwd ?? undefined });
+  } catch (err) {
+    // Holder pid is alive but session is dead (zombie holder, dead server session).
+    // Kill the holder and clean up state.
+    if (st.holderPid !== process.pid && pidAlive(st.holderPid)) {
+      try {
+        process.kill(st.holderPid);
+      } catch {}
+    }
+    deleteState(id);
+    const msg = err instanceof Error ? err.message : String(err);
+    return { stopped: false, sessionId: id, note: `session not reattachable (${msg}); holder killed and local state cleared` };
+  }
   client.send({ type: "stop" });
-  await client.waitFor(["stopped", "socket-closed"], 30_000);
+  const result = await client.waitFor(["stopped", "socket-closed"], 30_000);
   client.ws.close();
+  if (result.type === "timeout") {
+    // Stop was not confirmed within 30s; don't kill holder or delete state (leave for retry).
+    return { stopped: false, sessionId: id, note: "stop not confirmed within 30s; session may still be running" };
+  }
   if (st.holderPid !== process.pid && pidAlive(st.holderPid)) {
     try {
       process.kill(st.holderPid);
