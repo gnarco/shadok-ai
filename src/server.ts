@@ -199,6 +199,7 @@ async function createSession(
       broadcast(s, { type: "tokens", tokens: tokenTotals(s) });
     } else broadcast(s, { type: "stream-result", text: e.text, isError: e.isError });
   });
+  let settled = false;
   s.screenTimer = setInterval(() => {
     if (pilot.hasExited) return;
     const scr = pilot.screen();
@@ -206,6 +207,10 @@ async function createSession(
       s.lastScreen = scr;
       broadcast(s, { type: "screen", text: scr, working: pilot.isWorking() });
     }
+    // Spontaneous resume: work restarting without a client prompt (e.g. a
+    // background agent completing and waking the model). No handler called
+    // finishTurn, so watch for it here and signal the turn like any other.
+    if (settled && !s.busy && pilot.isWorking()) finishTurn(s).catch(() => {});
   }, 300);
 
   let screen = await pilot.waitForIdle({ stableMs: 1200, timeoutMs: 60_000 });
@@ -213,6 +218,7 @@ async function createSession(
     pilot.press("enter");
     screen = await pilot.waitForIdle({ stableMs: 1200, timeoutMs: 30_000 });
   }
+  settled = true;
   sessions.set(id, s);
   return s;
 }
