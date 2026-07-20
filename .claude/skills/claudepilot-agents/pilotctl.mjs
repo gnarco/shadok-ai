@@ -156,7 +156,27 @@ async function serverUp() {
 
 export async function ensureServer() {
   if (await serverUp()) return;
-  throw new Error(`claudepilot server unreachable on :${port()}`);
+  if (process.env.CLAUDEPILOT_NO_AUTOSTART)
+    throw new Error(`claudepilot server unreachable on :${port()}`);
+  const dist = path.join(REPO_ROOT, "dist", "server.js");
+  if (!fs.existsSync(dist))
+    execFileSync("npm", ["run", "build"], { cwd: REPO_ROOT, stdio: "ignore" });
+  fs.mkdirSync(stateDir(), { recursive: true });
+  const logPath = path.join(stateDir(), "server.log");
+  const log = fs.openSync(logPath, "a");
+  const child = spawnChild(process.execPath, [dist], {
+    cwd: REPO_ROOT,
+    detached: true,
+    stdio: ["ignore", log, log],
+    env: { ...process.env, PORT: String(port()) },
+  });
+  child.unref();
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    if (await serverUp()) return;
+    await sleep(300);
+  }
+  throw new Error(`claudepilot server did not come up on :${port()} (log: ${logPath})`);
 }
 
 // The server kills the claude process when its last WS client detaches, so a
@@ -249,6 +269,75 @@ async function cmdDialog(id, flags) {
   return r;
 }
 
+async function cmdList(flags) {
+  await ensureServer();
+  const cwd = flags.cwd ?? process.cwd();
+  const r = await fetch(`${httpBase()}/sessions?cwd=${encodeURIComponent(cwd)}`);
+  const resumable = await r.json();
+  const dir = stateDir();
+  const agents = !fs.existsSync(dir)
+    ? []
+    : fs
+        .readdirSync(dir)
+        .filter((f) => f.endsWith(".json"))
+        .map((f) => JSON.parse(fs.readFileSync(path.join(dir, f), "utf8")))
+        .map((s) => ({ ...s, live: !!(s.holderPid && pidAlive(s.holderPid)) }));
+  return { agents, resumable };
+}
+
+async function cmdDiff(id) {
+  await ensureServer();
+  const r = await fetch(`${httpBase()}/diff?session=${encodeURIComponent(id)}`);
+  const body = await r.json();
+  if (!body.error) return body;
+  // Session no longer live server-side: diff the worktree locally against
+  // the baseSha recorded at spawn time.
+  const st = readState(id);
+  if (!st?.cwd) throw new Error(`no live session and no local state for ${id}`);
+  const git = (args) =>
+    execFileSync("git", ["-C", st.cwd, ...args], { encoding: "utf8" }).trimEnd();
+  return {
+    status: git(["status", "--short"]),
+    diff: git(["diff", st.baseSha ?? "HEAD"]),
+    branch: st.branch ?? null,
+    fallback: true,
+  };
+}
+
+async function cmdStop(id) {
+  await ensureServer();
+  const st = readState(id);
+  const holderLive = !!(st?.holderPid && pidAlive(st.holderPid));
+  if (!holderLive) {
+    // No holder → we never kept this session alive; don't resurrect it just
+    // to stop it (it may belong to a browser client). Clear local state only.
+    deleteState(id);
+    return { stopped: false, sessionId: id, note: "no live holder; local state cleared" };
+  }
+  const client = await openSession({ resume: id, cwd: st?.cwd ?? undefined });
+  client.send({ type: "stop" });
+  await client.waitFor(["stopped", "socket-closed"], 30_000);
+  client.ws.close();
+  if (st.holderPid !== process.pid && pidAlive(st.holderPid)) {
+    try {
+      process.kill(st.holderPid);
+    } catch {}
+  }
+  deleteState(id);
+  return { stopped: true, sessionId: id };
+}
+
+async function cmdScreen(id, flags) {
+  await ensureServer();
+  const st = readState(id);
+  const cwd = flags.cwd ?? st?.cwd ?? undefined;
+  await ensureHolder(id, cwd);
+  const client = await openSession({ resume: id, cwd });
+  if (!client.state.lastScreen) await client.waitFor(["screen"], 5000);
+  client.ws.close();
+  return { sessionId: id, screen: client.state.lastScreen };
+}
+
 const HELP =
   "usage: pilotctl <spawn|prompt|dialog|choose|toggle|confirm|freetext|list|diff|stop|screen> …";
 
@@ -271,6 +360,14 @@ export async function run(argv) {
       return cmdTurn(pos[0], { type: "confirm" }, flags);
     case "freetext":
       return cmdTurn(pos[0], { type: "freetext", n: Number(pos[1]), text: pos[2] }, flags);
+    case "list":
+      return cmdList(flags);
+    case "diff":
+      return cmdDiff(pos[0]);
+    case "stop":
+      return cmdStop(pos[0]);
+    case "screen":
+      return cmdScreen(pos[0], flags);
     default:
       throw new Error(HELP);
   }
