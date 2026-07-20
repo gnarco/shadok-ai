@@ -93,12 +93,13 @@ type ClientMessage =
 type Pilot = ClaudePilot | TmuxPilot;
 
 /**
- * Selects the transport. With CLAUDEPILOT_TMUX=1 (and tmux installed) the
+ * Selects the transport. tmux is the DEFAULT whenever it is installed: the
  * agent runs in a detached tmux session named after the Claude session id, so
  * it survives the server restarting/crashing and is reattached on the next
- * start of the same id. Otherwise the default node-pty transport is used.
+ * start of the same id. Set CLAUDEPILOT_TMUX=0 to force the node-pty transport
+ * (which dies with the server). Falls back to node-pty if tmux is absent.
  */
-const USE_TMUX = process.env.CLAUDEPILOT_TMUX === "1" && tmuxAvailable();
+const USE_TMUX = process.env.CLAUDEPILOT_TMUX !== "0" && tmuxAvailable();
 function makePilot(id: string, cwd: string, args: string[]): Pilot {
   return USE_TMUX
     ? new TmuxPilot({ cwd, args, tmuxName: "cp-" + id })
@@ -580,4 +581,9 @@ wss.on("connection", (ws: WebSocket) => {
 
 server.listen(PORT, () => {
   console.log(`claudepilot web: http://localhost:${PORT}`);
+  console.log(
+    USE_TMUX
+      ? "transport: tmux (agents survive server restarts)"
+      : "transport: node-pty (agents die with the server; install tmux or unset CLAUDEPILOT_TMUX=0 for durability)",
+  );
 });
