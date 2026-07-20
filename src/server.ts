@@ -338,6 +338,12 @@ function clearRetry(s: Live, notify = false) {
 }
 
 /**
+ * Pas de re-test du rythme pendant une pause. Aligné sur le TTL du cache de
+ * usage.ts : la boucle d'attente n'émet aucune requête vers l'API.
+ */
+const PACE_RECHECK_MS = 60_000;
+
+/**
  * If the turn died on a NEW transient API error (529 Overloaded, 5xx,
  * timeout…), schedules an automatic `continue` — 15 s, then 30 s, then
  * 60 s. Cancelled if the user takes over; gives up after 3 attempts.
@@ -365,9 +371,24 @@ function maybeScheduleRetry(s: Live) {
     attempt: s.retryCount,
     max: RETRY_DELAYS_MS.length,
   });
-  s.retryTimer = setTimeout(async () => {
+  // Set when the retry has been parked on a pace overrun, so the resume is
+  // announced only to clients that were told about the pause.
+  let held = false;
+  const fire = async () => {
     s.retryTimer = null;
     if (s.pilot.hasExited || s.busy) return;
+    // Never forced: an automatic turn must not spend quota the user is being
+    // asked to hold back on. Park and re-test until the pace comes back down.
+    const verdict = paceBlock(await getUsage(), Date.now());
+    if (verdict.blocked) {
+      if (!held) {
+        held = true;
+        broadcast(s, { type: "pace-hold", reason: verdict.reason });
+      }
+      s.retryTimer = setTimeout(fire, PACE_RECHECK_MS);
+      return;
+    }
+    if (held) broadcast(s, { type: "pace-resumed" });
     broadcast(s, { type: "prompt-echo", text: "continue", auto: true });
     s.busy = true;
     s.turnStartedAt = Date.now();
@@ -380,7 +401,8 @@ function maybeScheduleRetry(s: Live) {
       s.busy = false;
     }
     await finishTurn(s).catch(() => {});
-  }, delayMs);
+  };
+  s.retryTimer = setTimeout(fire, delayMs);
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -408,9 +430,12 @@ wss.on("connection", (ws: WebSocket) => {
 
     try {
       // Any user takeover cancels a pending auto-retry and ends the streak.
+      // "prompt" is settled inside its own case instead: a prompt refused on
+      // pace grounds sends nothing, so it must not count as a takeover — it
+      // would silently kill the pace pause it was just told about.
       if (
         session &&
-        ["prompt", "choose", "toggle", "freetext", "confirm", "key"].includes(msg.type)
+        ["choose", "toggle", "freetext", "confirm", "key"].includes(msg.type)
       ) {
         clearRetry(session, true);
         session.retryCount = 0;
@@ -532,6 +557,10 @@ wss.on("connection", (ws: WebSocket) => {
             const verdict = paceBlock(await getUsage(), Date.now());
             if (verdict.blocked) return send({ type: "pace-blocked", reason: verdict.reason, text });
           }
+          // Getting here means the prompt is really being sent — that is the
+          // takeover. A pending auto-retry (or pace pause) gives way to it.
+          clearRetry(session, true);
+          session.retryCount = 0;
           session.lastPrompt = text;
           // The session's other clients see the prompt arrive.
           broadcast(session, { type: "prompt-echo", text }, ws);
