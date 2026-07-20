@@ -1221,13 +1221,17 @@
     tab.timerEl.classList.remove("done");
     tab.timerEl.textContent = fmtElapsed(Date.now() - tab.turnStart);
   }
+  /** Shows a finished turn's duration, dimmed, until the next send. */
+  function showFrozenTime(tab, ms) {
+    tab.timerEl.textContent = fmtElapsed(ms);
+    tab.timerEl.classList.add("done");
+  }
   /** Freezes the timer; the final time stays dimmed until the next send. */
   function stopTurnTimer(tab) {
     if (tab.turnStart) {
-      tab.timerEl.textContent = fmtElapsed(Date.now() - tab.turnStart);
+      showFrozenTime(tab, Date.now() - tab.turnStart);
       tab.turnStart = null;
-    }
-    tab.timerEl.classList.add("done");
+    } else tab.timerEl.classList.add("done");
   }
   setInterval(() => {
     for (const t of tabs) {
@@ -1800,6 +1804,9 @@
         }
         setTabState(t, "ready", "ready");
         persistChannels();
+        // Reattaching between turns: restore the last turn's time rather than
+        // leaving a blank timer. A "working" message right after overrides it.
+        if (msg.lastTurnMs) showFrozenTime(t, msg.lastTurnMs);
         addTurn(t, "system", "", "Session established. The pilot has the controls.");
         if (t === active) promptInput.focus();
         break;

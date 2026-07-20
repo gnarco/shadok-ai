@@ -149,6 +149,9 @@ interface Live {
   /** Epoch ms when the in-flight turn started — lets clients (re)joining
    *  mid-turn show the real thinking time instead of restarting at zero. */
   turnStartedAt: number | null;
+  /** How long the last finished turn took, so a client attaching between
+   *  turns can restore the frozen time instead of showing a blank timer. */
+  lastTurnMs: number | null;
 }
 
 /** Session-wide token totals, for the window-title counter. */
@@ -233,6 +236,7 @@ async function createSession(
     retryCount: 0,
     errorsAtTurnStart: [],
     turnStartedAt: null,
+    lastTurnMs: null,
   };
   pilot.onExit((code) => {
     broadcast(s, { type: "exited", code });
@@ -301,6 +305,9 @@ async function finishTurn(s: Live) {
     }
   } finally {
     s.busy = false;
+    // Remember how long it took: a dialog suspends the turn and a completion
+    // ends it, but both freeze the client's timer, so both are worth keeping.
+    if (s.turnStartedAt) s.lastTurnMs = Date.now() - s.turnStartedAt;
     s.turnStartedAt = null;
   }
 }
@@ -476,7 +483,12 @@ wss.on("connection", (ws: WebSocket) => {
             session.clients.add(ws);
             const turns = loadHistory(session.cwd, id);
             if (turns.length) send({ type: "history", turns });
-            send({ type: "ready", sessionId: id, cwd: session.cwd });
+            send({
+              type: "ready",
+              sessionId: id,
+              cwd: session.cwd,
+              lastTurnMs: session.lastTurnMs,
+            });
             send({ type: "tokens", tokens: tokenTotals(session) });
             send({
               type: "screen",
