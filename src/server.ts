@@ -13,6 +13,7 @@ import {
 } from "./extract.js";
 import { findTransientErrors, newTransientErrors, RETRY_DELAYS_MS } from "./retry.js";
 import { ClaudePilot } from "./session.js";
+import { TmuxPilot, tmuxAvailable } from "./tmux.js";
 import { scanUsage, sessionFilePath, tailSession, type TokenUsage } from "./tail.js";
 import { getUsage } from "./usage.js";
 import {
@@ -88,10 +89,26 @@ type ClientMessage =
  * attached clients — several tabs or interfaces can follow the same
  * session live.
  */
+/** Either transport — same surface; TmuxPilot additionally survives restarts. */
+type Pilot = ClaudePilot | TmuxPilot;
+
+/**
+ * Selects the transport. With CLAUDEPILOT_TMUX=1 (and tmux installed) the
+ * agent runs in a detached tmux session named after the Claude session id, so
+ * it survives the server restarting/crashing and is reattached on the next
+ * start of the same id. Otherwise the default node-pty transport is used.
+ */
+const USE_TMUX = process.env.CLAUDEPILOT_TMUX === "1" && tmuxAvailable();
+function makePilot(id: string, cwd: string, args: string[]): Pilot {
+  return USE_TMUX
+    ? new TmuxPilot({ cwd, args, tmuxName: "cp-" + id })
+    : new ClaudePilot({ cwd, args });
+}
+
 interface Live {
   id: string;
   cwd: string;
-  pilot: ClaudePilot;
+  pilot: Pilot;
   clients: Set<WebSocket>;
   busy: boolean;
   lastPrompt: string;
@@ -176,7 +193,7 @@ async function createSession(
   args: string[],
   worktree: Worktree | null = null,
 ): Promise<Live> {
-  const pilot = new ClaudePilot({ cwd, args });
+  const pilot = makePilot(id, cwd, args);
   const s: Live = {
     id,
     cwd,
