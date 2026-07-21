@@ -18,6 +18,7 @@ import { TmuxPilot, tmuxAvailable } from "./tmux.js";
 import { scanUsage, sessionFilePath, tailSession, type TokenUsage } from "./tail.js";
 import { computePace, paceBlock, WINDOW_SEC } from "./pace.js";
 import { getUsage, type Window } from "./usage.js";
+import { loadChannels, saveChannels } from "./channels.js";
 import {
   createWorktree,
   ensureWorktreeCheckout,
@@ -31,6 +32,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT ?? 3789);
 
 const app = express();
+app.use(express.json({ limit: "1mb" }));
 app.use(express.static(path.join(__dirname, "..", "public")));
 // Markdown parser served locally (history rendering on the client).
 app.get("/vendor/marked.js", (_req, res) =>
@@ -88,6 +90,13 @@ app.get("/recover", (req, res) => {
 // Server-side defaults (the launch directory pre-fills the working dir field).
 app.get("/defaults", (_req, res) => {
   res.json({ cwd: process.cwd() });
+});
+// Channel list, persisted server-side per launch directory — survives a wiped
+// browser, another device, a restart or a reboot.
+app.get("/channels", (_req, res) => res.json(loadChannels()));
+app.put("/channels", (req, res) => {
+  saveChannels(Array.isArray(req.body) ? req.body : []);
+  res.json({ ok: true });
 });
 
 const server = http.createServer(app);

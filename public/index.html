@@ -1057,10 +1057,27 @@
         sessionId: t.sessionId,
         cwd: t.cwd && t.cwd.startsWith("/") ? t.cwd : "",
         name: t.nameEl.textContent,
+        branch: t.branch || null,
+        repo: serverCwd || "",
         group: groupIdOf(t.btnEl),
       }));
     localStorage.setItem("cp.channels", JSON.stringify(list));
     persistGroups();
+    pushChannels(list);
+  }
+
+  // The channel list is mirrored server-side (keyed by the server's launch
+  // directory), so it survives a wiped browser, another device or a reboot.
+  let channelPushTimer = null;
+  function pushChannels(list) {
+    clearTimeout(channelPushTimer);
+    channelPushTimer = setTimeout(() => {
+      fetch("/channels", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(list),
+      }).catch(() => {});
+    }, 400);
   }
 
   /** Drops a session id from the remembered channels (invalid / gone). */
@@ -1069,6 +1086,7 @@
       (s) => s.sessionId !== sessionId,
     );
     localStorage.setItem("cp.channels", JSON.stringify(list));
+    pushChannels(list);
   }
 
   // ── Tab groups ──────────────────────────────────────────
@@ -2296,27 +2314,44 @@
   for (const g of JSON.parse(localStorage.getItem("cp.groups") || "[]")) {
     createGroup(g);
   }
-  const savedChannels = JSON.parse(localStorage.getItem("cp.channels") || "[]");
-  // Deduplicate by session id (data inherited from an old bug where several
-  // channels could converge to the same id).
-  const seenIds = new Set();
-  const uniqueChannels = savedChannels.filter(
-    (s) => s.sessionId && !seenIds.has(s.sessionId) && seenIds.add(s.sessionId),
-  );
-  if (uniqueChannels.length) {
-    for (const s of uniqueChannels) {
-      // A vanished group falls back to the ungrouped zone.
-      const t = createTab(s.group);
-      if (s.name) {
-        t.customName = true;
-        t.nameEl.textContent = s.name;
-      }
-      launchTab(t, { cwd: s.cwd, resume: s.sessionId });
+  // Restore channels: the server-side list (keyed by launch directory) is the
+  // source of truth so channels survive a wiped browser / reboot; fall back to
+  // this browser's localStorage if the server has none yet.
+  (async () => {
+    if (!serverCwd) {
+      try { serverCwd = (await (await fetch("/defaults")).json()).cwd || ""; } catch {}
     }
-    activate(tabs[0]);
-  } else {
-    createTab();
-  }
+    let saved = [];
+    try {
+      const fromServer = await (await fetch("/channels")).json();
+      if (Array.isArray(fromServer) && fromServer.length) saved = fromServer;
+    } catch { /* offline: use localStorage */ }
+    if (!saved.length) saved = JSON.parse(localStorage.getItem("cp.channels") || "[]");
+
+    const seenIds = new Set();
+    const uniqueChannels = saved.filter(
+      (s) => s.sessionId && !seenIds.has(s.sessionId) && seenIds.add(s.sessionId),
+    );
+    if (uniqueChannels.length) {
+      for (const s of uniqueChannels) {
+        const t = createTab(s.group);
+        if (s.name) {
+          t.customName = true;
+          t.nameEl.textContent = s.name;
+        }
+        // Pass branch/repo so a reclaimed worktree checkout is recreated.
+        launchTab(t, {
+          cwd: s.cwd,
+          resume: s.sessionId,
+          branch: s.branch || undefined,
+          repo: s.repo || serverCwd || undefined,
+        });
+      }
+      activate(tabs[0]);
+    } else {
+      createTab();
+    }
+  })();
 </script>
 </body>
 </html>
