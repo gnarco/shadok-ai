@@ -299,10 +299,23 @@ async function createSession(
   let screen = await pilot.waitFor(isUp, { timeoutMs: 60_000 });
   if (/do you trust the files/i.test(screen)) {
     pilot.press("enter");
-    await pilot.waitFor(
+    screen = await pilot.waitFor(
       (scr) => screenShowsWork(scr) || scr.includes("❯"),
       { timeoutMs: 30_000 },
     );
+  }
+  // Resuming a large session shows a "resume from summary?" prompt. Keep the
+  // FULL session as-is automatically (the machine may have slept mid-work; the
+  // user wants their full context back, not a summary), unless disabled.
+  if (process.env.CLAUDEPILOT_RESUME_SUMMARY !== "1") {
+    const rd = detectDialog(screen);
+    const full = rd?.options.find((o) => /full session/i.test(o.label));
+    if (full && /resum|summary/i.test(rd!.question)) {
+      await selectOption(pilot, full.n);
+      await pilot
+        .waitFor((scr) => screenShowsWork(scr) || scr.includes("❯"), { timeoutMs: 30_000 })
+        .catch(() => {});
+    }
   }
   settled = true;
   sessions.set(id, s);
