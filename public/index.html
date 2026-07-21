@@ -1133,6 +1133,7 @@
     return g ? g._group.id : null;
   }
 
+  let groupPushTimer = null;
   function persistGroups() {
     const list = [...groupsEl.children].map((el) => ({
       id: el._group.id,
@@ -1141,6 +1142,15 @@
     }));
     localStorage.setItem("cp.groups", JSON.stringify(list));
     localStorage.setItem("cp.groupSeq", String(groupSeq));
+    if (restoring) return; // don't overwrite the server set mid-restore
+    clearTimeout(groupPushTimer);
+    groupPushTimer = setTimeout(() => {
+      fetch("/groups", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(list),
+      }).catch(() => {});
+    }, 400);
   }
 
   function createGroup(opts = {}) {
@@ -2361,19 +2371,22 @@
   refreshUsage();
   setInterval(refreshUsage, 60_000);
 
-  // On load: restore the remembered groups, then the remembered channels by
-  // resuming each session (the server replays the history); otherwise start
-  // with a blank channel.
-  for (const g of JSON.parse(localStorage.getItem("cp.groups") || "[]")) {
-    createGroup(g);
-  }
-  // Restore channels: the server-side list (keyed by launch directory) is the
-  // source of truth so channels survive a wiped browser / reboot; fall back to
-  // this browser's localStorage if the server has none yet.
+  // On load: restore the remembered groups (server-side, keyed by launch
+  // directory), then the remembered channels by resuming each session (the
+  // server replays the history); otherwise start with a blank channel.
   (async () => {
     if (!serverCwd) {
       try { serverCwd = (await (await fetch("/defaults")).json()).cwd || ""; } catch {}
     }
+    // Groups first, so channels land in the right one.
+    let savedGroups = [];
+    try {
+      const g = await (await fetch("/groups")).json();
+      if (Array.isArray(g) && g.length) savedGroups = g;
+    } catch {}
+    if (!savedGroups.length) savedGroups = JSON.parse(localStorage.getItem("cp.groups") || "[]");
+    for (const g of savedGroups) createGroup(g);
+
     let saved = [];
     try {
       const fromServer = await (await fetch("/channels")).json();
@@ -2409,6 +2422,7 @@
       // Restore done: re-enable persistence and write the full set once.
       restoring = false;
       persistChannels();
+      if (savedGroups.length) persistGroups(); // sync groups (e.g. from localStorage fallback)
     } else {
       createTab();
       // Nothing to restore: enable persistence for user actions, but do NOT

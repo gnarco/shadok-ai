@@ -18,7 +18,7 @@ import { TmuxPilot, tmuxAvailable } from "./tmux.js";
 import { scanUsage, sessionFilePath, tailSession, type TokenUsage } from "./tail.js";
 import { computePace, paceBlock, WINDOW_SEC } from "./pace.js";
 import { getUsage, type Window } from "./usage.js";
-import { loadChannels, saveChannels } from "./channels.js";
+import { loadChannels, saveChannels, loadGroups, saveGroups } from "./channels.js";
 import {
   createWorktree,
   ensureWorktreeCheckout,
@@ -96,6 +96,11 @@ app.get("/defaults", (_req, res) => {
 app.get("/channels", (_req, res) => res.json(loadChannels()));
 app.put("/channels", (req, res) => {
   saveChannels(Array.isArray(req.body) ? req.body : []);
+  res.json({ ok: true });
+});
+app.get("/groups", (_req, res) => res.json(loadGroups()));
+app.put("/groups", (req, res) => {
+  saveGroups(Array.isArray(req.body) ? req.body : []);
   res.json({ ok: true });
 });
 

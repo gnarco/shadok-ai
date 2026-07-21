@@ -18,26 +18,42 @@ export interface Channel {
  * another device, a server restart, or a reboot. Each launch directory keeps
  * its own list under ~/.claudepilot/channels/<encoded cwd>.json.
  */
-function storeFile(): string {
+function storeFile(kind: string): string {
   const enc = process.cwd().replace(/[^a-zA-Z0-9]/g, "-");
-  return path.join(os.homedir(), ".claudepilot", "channels", enc + ".json");
+  const suffix = kind === "channels" ? "" : "-" + kind;
+  return path.join(os.homedir(), ".claudepilot", "channels", enc + suffix + ".json");
 }
 
-export function loadChannels(): Channel[] {
+function readJson(kind: string): any[] {
   try {
-    const list = JSON.parse(fs.readFileSync(storeFile(), "utf8"));
-    return Array.isArray(list) ? list.filter((c) => c && typeof c.sessionId === "string") : [];
+    const v = JSON.parse(fs.readFileSync(storeFile(kind), "utf8"));
+    return Array.isArray(v) ? v : [];
   } catch {
     return [];
   }
 }
 
-export function saveChannels(list: Channel[]): void {
-  const f = storeFile();
+function writeJson(kind: string, value: any[]): void {
+  const f = storeFile(kind);
   try {
     fs.mkdirSync(path.dirname(f), { recursive: true });
-    fs.writeFileSync(f, JSON.stringify(list, null, 2));
+    fs.writeFileSync(f, JSON.stringify(value, null, 2));
   } catch {
     // best effort: losing the persisted list is non-fatal
   }
+}
+
+export function loadChannels(): Channel[] {
+  return readJson("channels").filter((c) => c && typeof c.sessionId === "string");
+}
+export function saveChannels(list: Channel[]): void {
+  writeJson("channels", list);
+}
+
+/** Tab groups (id, name, collapsed, order), persisted the same way as channels. */
+export function loadGroups(): any[] {
+  return readJson("groups");
+}
+export function saveGroups(list: any[]): void {
+  writeJson("groups", list);
 }
