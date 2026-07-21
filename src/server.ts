@@ -156,6 +156,8 @@ interface Live {
   lastPrompt: string;
   screenTimer: ReturnType<typeof setInterval> | null;
   lastScreen: string;
+  /** Context-window usage (%) parsed from the TUI footer, per session. */
+  contextPct: number | null;
   /** Stops the .jsonl tail loop (content streaming). */
   stopTail: (() => void) | null;
   /** Isolated git worktree, when the session runs in one. */
@@ -251,6 +253,7 @@ async function createSession(
     lastPrompt: "",
     screenTimer: null,
     lastScreen: "",
+    contextPct: null,
     stopTail: null,
     worktree,
     idleTimer: null,
@@ -292,6 +295,13 @@ async function createSession(
     if (scr !== s.lastScreen) {
       s.lastScreen = scr;
       broadcast(s, { type: "screen", text: scr, working: pilot.isWorking() });
+      // Context-window usage from the TUI footer ("… ctx:37% …"), per session.
+      const m = scr.match(/ctx:\s*(\d+)\s*%/i);
+      const pct = m ? Number(m[1]) : s.contextPct;
+      if (pct !== s.contextPct) {
+        s.contextPct = pct;
+        broadcast(s, { type: "context", pct });
+      }
     }
     // Spontaneous resume: work restarting without a client prompt (e.g. a
     // background agent completing and waking the model). No handler called
@@ -621,6 +631,7 @@ wss.on("connection", (ws: WebSocket) => {
               lastTurnMs: session.lastTurnMs,
             });
             send({ type: "tokens", tokens: tokenTotals(session) });
+            if (session.contextPct !== null) send({ type: "context", pct: session.contextPct });
             send({
               type: "screen",
               text: session.pilot.screen(),
@@ -645,6 +656,7 @@ wss.on("connection", (ws: WebSocket) => {
             branch: worktree?.branch ?? null,
           });
           send({ type: "tokens", tokens: tokenTotals(session) });
+            if (session.contextPct !== null) send({ type: "context", pct: session.contextPct });
           sendPendingDialog(session, send);
           break;
         }

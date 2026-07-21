@@ -142,6 +142,7 @@
   }
   #tabbar .side-label { padding: 0 8px 8px; }
   .tab {
+    position: relative;
     display: flex;
     align-items: center;
     gap: 8px;
@@ -150,10 +151,31 @@
     color: var(--text-dim);
     border-left: 2px solid transparent;
     border-radius: 4px;
-    padding: 9px 10px;
+    padding: 9px 10px 11px;
     cursor: pointer;
     user-select: none;
   }
+  /* Context-window usage: tiny number + thin bar at the bottom of the tab. */
+  .tab .ctxnum { font-size: 9px; color: var(--text-dim); flex: none; }
+  .tab .ctxbar {
+    position: absolute;
+    left: 10px;
+    right: 10px;
+    bottom: 3px;
+    height: 2px;
+    background: var(--line);
+    border-radius: 1px;
+    overflow: hidden;
+  }
+  .tab .ctxfill {
+    display: block;
+    height: 100%;
+    width: 0%;
+    background: var(--ok);
+    transition: width 0.4s ease;
+  }
+  .tab .ctxfill.warn { background: var(--amber); }
+  .tab .ctxfill.crit { background: var(--err); }
   .tab:hover { color: var(--text); background: var(--bg-inset); }
   .tab.active {
     color: var(--amber);
@@ -912,11 +934,20 @@
     const timer = document.createElement("span");
     timer.className = "timer";
     timer.title = "Thinking time for the current turn";
+    const ctxNum = document.createElement("span");
+    ctxNum.className = "ctxnum";
     const close = document.createElement("span");
     close.className = "close";
     close.textContent = "×";
     close.title = "Close this channel";
-    btn.append(led, name, timer, close);
+    btn.append(led, name, timer, ctxNum, close);
+    // Context-window usage: a thin progress bar at the bottom of the tab.
+    const ctxBar = document.createElement("div");
+    ctxBar.className = "ctxbar";
+    const ctxFill = document.createElement("span");
+    ctxFill.className = "ctxfill";
+    ctxBar.appendChild(ctxFill);
+    btn.appendChild(ctxBar);
     const group = groupId != null && groups.find((g) => g.id === groupId);
     (group ? group.bodyEl : ungroupedEl).appendChild(btn);
 
@@ -931,8 +962,10 @@
       screenText: "",
       draft: "",
       turnStart: null,   // Date.now() while a turn's thinking timer runs
+      contextPct: null,
       transcriptEl: el,
       btnEl: btn, ledEl: led, nameEl: name, timerEl: timer,
+      ctxNumEl: ctxNum, ctxFillEl: ctxFill,
     };
     btn._tab = tab;
     btn.addEventListener("click", (e) => {
@@ -1350,6 +1383,20 @@
       refreshRecoverList();
       refreshLiveList();
     }
+  }
+
+  /** Paints a channel's context-window usage bar + tiny number in its tab. */
+  function renderContext(tab) {
+    const p = tab.contextPct;
+    if (p == null) {
+      tab.ctxNumEl.textContent = "";
+      tab.ctxFillEl.style.width = "0%";
+      return;
+    }
+    tab.ctxNumEl.textContent = p + "%";
+    tab.ctxFillEl.style.width = Math.min(100, p) + "%";
+    tab.ctxFillEl.classList.toggle("warn", p >= 60 && p < 85);
+    tab.ctxFillEl.classList.toggle("crit", p >= 85);
   }
 
   function addTurn(tab, role, who, text, extraClass) {
@@ -1872,6 +1919,10 @@
       case "tokens":
         t.tokens = msg.tokens;
         refreshTitle();
+        break;
+      case "context":
+        t.contextPct = msg.pct;
+        renderContext(t);
         break;
       case "stream-text":
         // A complete assistant text block, streamed from the transcript.
