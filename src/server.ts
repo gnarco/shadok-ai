@@ -388,6 +388,10 @@ async function selectOption(pilot: Pilot, n: number): Promise<void> {
  */
 function sendPendingDialog(s: Live, send: (msg: object) => void) {
   const d = detectDialog(s.pilot.screen());
+  // The resume-from-summary prompt is auto-answered at startup; don't surface
+  // it (a stale copy can otherwise flash before the auto-answer lands).
+  if (d && d.options.some((o) => /full session/i.test(o.label)) && /resum|summary/i.test(d.question))
+    return;
   if (d) send({ type: "dialog", ...d });
 }
 
