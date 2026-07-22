@@ -107,23 +107,33 @@ export function tailSession(
 }
 
 function emitLine(line: string, onEvent: (e: TailEvent) => void) {
-  if (!line.trim()) return;
+  for (const ev of parseLine(line)) onEvent(ev);
+}
+
+/**
+ * Pure parser for one transcript line → the events it yields. Exported for
+ * tests; `tailSession` streams these live. Returns [] for anything that isn't
+ * a streamable assistant/user event.
+ */
+export function parseLine(line: string): TailEvent[] {
+  if (!line.trim()) return [];
   let e: any;
   try {
     e = JSON.parse(line);
   } catch {
-    return;
+    return [];
   }
-  if (e.isMeta || !Array.isArray(e.message?.content)) return;
+  if (e.isMeta || !Array.isArray(e.message?.content)) return [];
+  const out: TailEvent[] = [];
 
   if (e.type === "assistant") {
     const usage = parseUsage(e.message);
-    if (usage) onEvent({ kind: "usage", messageId: e.message.id ?? e.uuid, usage });
+    if (usage) out.push({ kind: "usage", messageId: e.message.id ?? e.uuid, usage });
     for (const block of e.message.content) {
       if (block?.type === "text" && typeof block.text === "string" && block.text.trim()) {
-        onEvent({ kind: "text", text: block.text });
+        out.push({ kind: "text", text: block.text });
       } else if (block?.type === "tool_use" && typeof block.name === "string") {
-        onEvent({
+        out.push({
           kind: "tool",
           id: typeof block.id === "string" ? block.id : "",
           name: block.name,
@@ -139,7 +149,7 @@ function emitLine(line: string, onEvent: (e: TailEvent) => void) {
       if (block?.type !== "tool_result") continue;
       const text = resultText(block.content);
       if (text) {
-        onEvent({
+        out.push({
           kind: "result",
           toolUseId: typeof block.tool_use_id === "string" ? block.tool_use_id : "",
           text,
@@ -148,9 +158,10 @@ function emitLine(line: string, onEvent: (e: TailEvent) => void) {
       }
     }
   }
+  return out;
 }
 
-function parseUsage(message: any): TokenUsage | null {
+export function parseUsage(message: any): TokenUsage | null {
   const u = message?.usage;
   if (!u || typeof u !== "object") return null;
   return {
@@ -190,7 +201,7 @@ export function scanUsage(file: string): Map<string, TokenUsage> {
 }
 
 /** Flattens a tool_result's content (string or block array) to display text. */
-function resultText(content: any): string {
+export function resultText(content: any): string {
   let s = "";
   if (typeof content === "string") s = content;
   else if (Array.isArray(content))
