@@ -6,12 +6,13 @@
  */
 
 /**
- * Marker displayed by older Claude Code TUIs while working. Excluded when
- * wrapped in quotes, so prose that *mentions* the phrase (e.g. Claude
- * explaining claudepilot's own turn detection) doesn't read as "working" —
- * the genuine status line is never quoted.
+ * Marker displayed by Claude Code TUIs while working. The genuine one always
+ * sits in the status group, right after a "·" separator or an opening "(",
+ * e.g. "(… · esc to interrupt)". Requiring that prefix means prose that merely
+ * *mentions* the phrase — Claude explaining claudepilot's own turn detection,
+ * quoted or not — never reads as "working".
  */
-const ESC_TO_INTERRUPT = /(?<!["'«“‘])esc to interrupt(?!["'»”’])/i;
+const ESC_TO_INTERRUPT = /[·(]\s*esc to interrupt/i;
 
 /**
  * Newer TUIs drop the "esc to interrupt" hint; the live spinner line is then

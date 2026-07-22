@@ -69,7 +69,7 @@ function readOAuthToken(): string | null {
   return null;
 }
 
-function parseWindow(w: any): Window | null {
+export function parseWindow(w: any): Window | null {
   if (!w) return null;
   // The endpoint returns `utilization` (0–100); older/statusline shapes use
   // `used_percentage`. `resets_at` is an ISO string here (epoch seconds
