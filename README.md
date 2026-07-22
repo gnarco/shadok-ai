@@ -1,5 +1,10 @@
 # claudepilot
 
+> **Working on this codebase?** Read [`CLAUDE.md`](CLAUDE.md) (map, build/run,
+> invariants) and [`docs/architecture.md`](docs/architecture.md) first — they
+> are the current source of truth. This README covers the original single-session
+> library/CLI; claudepilot is now a multi-session web cockpit (see those docs).
+
 Drives a **Claude Code TUI** session (the interactive `claude` CLI) from Node.js, through a pseudo-terminal.
 
 > ⚠️ The Claude Code TUI is not a stable API: a CLI update can break the
