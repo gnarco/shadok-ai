@@ -7,7 +7,7 @@ export const WINDOW_SEC = { fiveHour: 5 * 3600, sevenDay: 7 * 86400 } as const;
  * Ajouté au rythme idéal au dénominateur. Sans lui, le rythme est quasi nul
  * juste après un reset et le moindre message ferait exploser le ratio.
  */
-const PACE_EPSILON = 2;
+export const PACE_EPSILON = 2;
 
 /** Au-delà de ce ratio (en % du rythme idéal), on bloque. En dur, par choix. */
 const BLOCK_RATIO = 100;
