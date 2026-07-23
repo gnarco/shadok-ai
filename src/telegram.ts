@@ -469,15 +469,23 @@ export function startTelegram(port: number): void {
     else b.pendingActions.push(wsMsg);
   };
 
-  // A topic created in Telegram → remember its name so a session bound to it
-  // later adopts it (and seed the channel if one already exists).
+  // A topic created in Telegram → spawn its agent right away, so the channel
+  // shows up in the GUI before anyone writes. Creating a topic = creating an
+  // agent (the board model). Skips topics already bound (e.g. the bot's own
+  // /spawn, which opened the bridge before this event arrived).
   const handleTopicCreated = (msg: any) => {
     const name = msg.forum_topic_created?.name;
-    if (typeof name !== "string" || !name) return;
-    const key = bindKey(msg.chat, msg.message_thread_id);
-    topicNames.set(key, name);
-    const ch = channelForTelegram(msg.chat.id, msg.message_thread_id);
-    if (ch && !ch.name) upsertChannel({ sessionId: ch.sessionId, name });
+    const threadId = msg.message_thread_id;
+    const key = bindKey(msg.chat, threadId);
+    if (typeof name === "string" && name) topicNames.set(key, name);
+    if (msg.chat.id !== loadTgGroup()) return; // only the bound board group
+    const ch = channelForTelegram(msg.chat.id, threadId);
+    if (bridges.has(key) || ch) {
+      if (ch && !ch.name && name) upsertChannel({ sessionId: ch.sessionId, name });
+      return;
+    }
+    openBridge(key, msg.chat.id, threadId, { worktree: true, name });
+    reply(msg.chat.id, threadId, `🤖 Agent « ${name ?? "agent"} » ready (isolated worktree). Send it a task.`);
   };
 
   // A topic renamed in Telegram → update the one registry so the web tab follows.
