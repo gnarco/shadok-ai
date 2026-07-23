@@ -708,7 +708,11 @@ wss.on("connection", (ws: WebSocket) => {
           // navigate") ignore digit keys, so navigate the ❯ cursor to the
           // target option with arrows, then Enter (works for all variants).
           if (!session) return fail("no session started");
-          if (session.busy) return fail("a response is already in progress");
+          // A visible dialog is a paused turn awaiting input — answering it is
+          // always valid, even while `busy` is transiently set (e.g. right
+          // after a reattach re-runs finishTurn).
+          if (session.busy && !detectDialog(session.pilot.screen()))
+            return fail("a response is already in progress");
           await selectOption(session.pilot, msg.n);
           await sleep(500);
           await finishTurn(session);
@@ -718,7 +722,8 @@ wss.on("connection", (ws: WebSocket) => {
         case "toggle": {
           // Multi-select: toggle the checkbox then rebroadcast the state.
           if (!session) return fail("no session started");
-          if (session.busy) return fail("a response is already in progress");
+          if (session.busy && !detectDialog(session.pilot.screen()))
+            return fail("a response is already in progress");
           session.pilot.write(String(msg.n));
           await sleep(500);
           const d = detectDialog(session.pilot.screen());
@@ -730,7 +735,8 @@ wss.on("connection", (ws: WebSocket) => {
         case "freetext": {
           // "Type something" option: digit → paste the text → Enter.
           if (!session) return fail("no session started");
-          if (session.busy) return fail("a response is already in progress");
+          if (session.busy && !detectDialog(session.pilot.screen()))
+            return fail("a response is already in progress");
           const t = msg.text.trim();
           if (!t) return;
           session.pilot.write(String(msg.n));
@@ -748,7 +754,8 @@ wss.on("connection", (ws: WebSocket) => {
         case "confirm": {
           // Multi-select: Tab → "Submit answers" page → Enter.
           if (!session) return fail("no session started");
-          if (session.busy) return fail("a response is already in progress");
+          if (session.busy && !detectDialog(session.pilot.screen()))
+            return fail("a response is already in progress");
           session.pilot.press("tab");
           await sleep(600);
           session.pilot.press("enter");
