@@ -28,6 +28,7 @@ import {
 } from "./channels.js";
 import { startTelegram, renameTelegramTopic, closeTelegramTopic } from "./telegram.js";
 import { migrateTgBindings } from "./channels.js";
+import { secretsForCwd, secretKeys, setSecret, deleteSecret, resolveRepo } from "./secrets.js";
 import {
   createWorktree,
   ensureWorktreeCheckout,
@@ -123,6 +124,31 @@ app.put("/groups", (req, res) => {
   res.json({ ok: true });
 });
 
+// Per-repo secrets, injected as env into agents (stored 600 outside any repo).
+// The repo is resolved from a session's cwd; values are NEVER returned.
+function repoOf(session: unknown, repo: unknown): string {
+  const s = sessions.get(String(session ?? ""));
+  return s ? resolveRepo(s.cwd) : String(repo ?? "").trim() || process.cwd();
+}
+app.get("/secrets", (req, res) => {
+  const repo = repoOf(req.query.session, req.query.repo);
+  res.json({ repo, keys: secretKeys(repo) });
+});
+app.put("/secrets", (req, res) => {
+  const { session, repo, key, value } = req.body ?? {};
+  if (typeof key !== "string" || !key.trim() || typeof value !== "string")
+    return res.status(400).json({ error: "key and value required" });
+  const r = repoOf(session, repo);
+  setSecret(r, key.trim(), value);
+  res.json({ repo: r, keys: secretKeys(r) });
+});
+app.delete("/secrets", (req, res) => {
+  const { session, repo, key } = req.body ?? {};
+  const r = repoOf(session, repo);
+  if (typeof key === "string") deleteSecret(r, key);
+  res.json({ repo: r, keys: secretKeys(r) });
+});
+
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: "/ws" });
 
@@ -166,9 +192,11 @@ type Pilot = PtyPilot | TmuxPilot;
  */
 const USE_TMUX = process.env.SHADOK_TMUX !== "0" && tmuxAvailable();
 function makePilot(id: string, cwd: string, args: string[]): Pilot {
+  // Inject the repo's secrets as env — never written into the working dir.
+  const env = secretsForCwd(cwd);
   return USE_TMUX
-    ? new TmuxPilot({ cwd, args, tmuxName: "sk-" + id })
-    : new PtyPilot({ cwd, args });
+    ? new TmuxPilot({ cwd, args, env, tmuxName: "sk-" + id })
+    : new PtyPilot({ cwd, args, env });
 }
 
 interface Live {

@@ -752,6 +752,20 @@
   @media (max-width: 900px) {
     #machine, #diffpanel { position: fixed; inset: 0; width: auto; max-width: none; z-index: 10; border-left: none; }
   }
+  #secretsOverlay { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: flex; align-items: center; justify-content: center; z-index: 50; }
+  #secretsPanel { background: var(--panel, #1b1d22); color: var(--fg, #e8e8ea); width: min(520px, 92vw); max-height: 80vh; overflow: auto; border-radius: 10px; padding: 16px 18px; box-shadow: 0 10px 40px rgba(0,0,0,.5); }
+  #secretsPanel .sec-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+  #secretsPanel .sec-head button { background: none; border: none; color: inherit; font-size: 16px; cursor: pointer; }
+  #secretsPanel .sec-repo { font-size: 12px; opacity: .8; margin-bottom: 4px; word-break: break-all; }
+  #secretsPanel .sec-note { font-size: 12px; opacity: .65; margin: 6px 0 12px; }
+  #secretsList { list-style: none; padding: 0; margin: 0 0 12px; }
+  #secretsList li { display: flex; justify-content: space-between; align-items: center; padding: 6px 8px; border-radius: 6px; }
+  #secretsList li:nth-child(odd) { background: rgba(255,255,255,.04); }
+  #secretsList code { font-size: 13px; }
+  #secretsList button { background: none; border: none; color: #e26; cursor: pointer; font-size: 14px; }
+  #secretsAdd { display: flex; gap: 8px; }
+  #secretsAdd input { flex: 1; min-width: 0; padding: 6px 8px; border-radius: 6px; border: 1px solid rgba(255,255,255,.15); background: rgba(0,0,0,.25); color: inherit; }
+  #secretsAdd button { padding: 6px 12px; border-radius: 6px; border: 1px solid rgba(255,255,255,.15); background: rgba(255,255,255,.08); color: inherit; cursor: pointer; }
 </style>
 </head>
 <body>
@@ -789,8 +803,26 @@
   </div>
   <button id="toggleDiff">Diff</button>
   <button id="toggleMachine">Terminal</button>
+  <button id="secretsBtn" title="Repo secrets (injected as env)">Secrets</button>
   <button id="stopBtn">End session</button>
 </header>
+
+<div id="secretsOverlay" hidden>
+  <div id="secretsPanel">
+    <div class="sec-head">
+      <strong>Secrets</strong>
+      <button id="secretsClose" title="Close">✕</button>
+    </div>
+    <div class="sec-repo">repo: <code id="secretsRepo">—</code></div>
+    <p class="sec-note">Injected as env vars into agents of this repo at spawn (stored 600 outside the repo). Values are write-only. Applies to newly spawned/restarted agents.</p>
+    <ul id="secretsList"></ul>
+    <form id="secretsAdd">
+      <input id="secretKey" placeholder="KEY" autocomplete="off" spellcheck="false" />
+      <input id="secretVal" placeholder="value" autocomplete="off" spellcheck="false" />
+      <button type="submit">Add</button>
+    </form>
+  </div>
+</div>
 
 <main>
   <nav id="tabbar" aria-label="Channels">
@@ -2363,6 +2395,53 @@
   });
   $("stopBtn").addEventListener("click", () => {
     if (active.ws) active.ws.send(JSON.stringify({ type: "stop" }));
+  });
+
+  // ── Secrets panel (per-repo env, injected at spawn) ──────────────
+  async function secretsFetch(method, body) {
+    const opts = { method, headers: { "Content-Type": "application/json" } };
+    const q = active && active.sessionId ? "?session=" + encodeURIComponent(active.sessionId) : "";
+    if (body) opts.body = JSON.stringify({ session: active && active.sessionId, ...body });
+    const r = await fetch("/secrets" + (method === "GET" ? q : ""), opts);
+    return r.json();
+  }
+  function renderSecrets(data) {
+    $("secretsRepo").textContent = data.repo || "—";
+    const ul = $("secretsList");
+    ul.innerHTML = "";
+    if (!data.keys || !data.keys.length) {
+      const li = document.createElement("li");
+      li.innerHTML = '<span style="opacity:.6">no secrets for this repo</span>';
+      ul.appendChild(li);
+    }
+    for (const k of data.keys || []) {
+      const li = document.createElement("li");
+      const code = document.createElement("code");
+      code.textContent = k;
+      const del = document.createElement("button");
+      del.textContent = "✕"; del.title = "Remove";
+      del.addEventListener("click", async () => renderSecrets(await secretsFetch("DELETE", { key: k })));
+      li.append(code, del);
+      ul.appendChild(li);
+    }
+  }
+  async function openSecrets() {
+    renderSecrets(await secretsFetch("GET"));
+    $("secretsOverlay").hidden = false;
+    $("secretKey").focus();
+  }
+  $("secretsBtn").addEventListener("click", openSecrets);
+  $("secretsClose").addEventListener("click", () => { $("secretsOverlay").hidden = true; });
+  $("secretsOverlay").addEventListener("click", (e) => { if (e.target === $("secretsOverlay")) $("secretsOverlay").hidden = true; });
+  $("secretsAdd").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const key = $("secretKey").value.trim();
+    const value = $("secretVal").value;
+    if (!key) return;
+    const data = await secretsFetch("PUT", { key, value });
+    $("secretKey").value = ""; $("secretVal").value = "";
+    renderSecrets(data);
+    $("secretKey").focus();
   });
   newTabBtn.addEventListener("click", () => createTab());
   newGroupBtn.addEventListener("click", () => {

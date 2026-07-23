@@ -88,7 +88,10 @@ export class TmuxPilot {
         .filter((k) => /^(CLAUDE|CLAUDECODE|AI_AGENT)/.test(k))
         .flatMap((k) => ["-u", k]);
       const bin = this.opts.claudePath ?? "claude";
-      const cmd = ["env", ...unset, "TERM=xterm-256color", bin, ...(this.opts.args ?? [])]
+      // Repo secrets → KEY=VALUE assignments for the `env` prefix (each token is
+      // single-quoted below, so values with spaces/specials are safe).
+      const secretEnv = Object.entries(this.opts.env ?? {}).map(([k, v]) => `${k}=${v}`);
+      const cmd = ["env", ...unset, "TERM=xterm-256color", ...secretEnv, bin, ...(this.opts.args ?? [])]
         .map((a) => `'${String(a).replace(/'/g, "'\\''")}'`)
         .join(" ");
       tmux([
