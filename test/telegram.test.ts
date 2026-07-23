@@ -1,6 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { bindKey, chunk, parseCommand, dialogKeyboard, parseCallback, makeTyping, mdToTelegramHtml } from "../src/telegram.js";
+import {
+  bindKey,
+  chunk,
+  parseCommand,
+  dialogKeyboard,
+  parseCallback,
+  makeTyping,
+  mdToTelegramHtml,
+  attachmentOf,
+  mediaFileName,
+} from "../src/telegram.js";
 
 test("bindKey: DM, group, and forum topic map to distinct keys", () => {
   assert.equal(bindKey({ id: 42, type: "private" }), "private:42");
@@ -143,4 +153,45 @@ test("mdToTelegramHtml: bare <>& are escaped so the HTML is well-formed", () => 
 
 test("mdToTelegramHtml: a lone marker stays literal (no unbalanced tag)", () => {
   assert.equal(mdToTelegramHtml("2 * 3 = 6"), "2 * 3 = 6");
+});
+
+test("attachmentOf: photo → la plus grande taille, kind image", () => {
+  const att = attachmentOf({
+    photo: [
+      { file_id: "small", file_unique_id: "u1", file_size: 100 },
+      { file_id: "big", file_unique_id: "u2", file_size: 5000 },
+    ],
+  });
+  assert.deepEqual(att, { fileId: "big", fileUniqueId: "u2", kind: "image", fileSize: 5000 });
+});
+
+test("attachmentOf: document image/* → kind image, garde le nom", () => {
+  const att = attachmentOf({
+    document: { file_id: "f", file_unique_id: "u", file_name: "shot.png", mime_type: "image/png", file_size: 42 },
+  });
+  assert.deepEqual(att, { fileId: "f", fileUniqueId: "u", kind: "image", fileName: "shot.png", fileSize: 42 });
+});
+
+test("attachmentOf: document quelconque → kind file", () => {
+  const att = attachmentOf({
+    document: { file_id: "f", file_unique_id: "u", file_name: "rapport.pdf", mime_type: "application/pdf" },
+  });
+  assert.equal(att?.kind, "file");
+  assert.equal(att?.fileName, "rapport.pdf");
+});
+
+test("attachmentOf: message texte pur → null", () => {
+  assert.equal(attachmentOf({ text: "hello" }), null);
+});
+
+test("mediaFileName: nom original préfixé par l'id unique, nettoyé", () => {
+  assert.equal(
+    mediaFileName({ fileId: "f", fileUniqueId: "AQAD", kind: "file", fileName: "../é vil/rapport final.pdf" }),
+    "AQAD-rapport final.pdf",
+  );
+});
+
+test("mediaFileName: photo sans nom → .jpg ; fichier sans nom → id nu", () => {
+  assert.equal(mediaFileName({ fileId: "f", fileUniqueId: "AQAD", kind: "image" }), "AQAD.jpg");
+  assert.equal(mediaFileName({ fileId: "f", fileUniqueId: "AQAD", kind: "file" }), "AQAD");
 });

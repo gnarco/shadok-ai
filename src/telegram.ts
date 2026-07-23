@@ -1,3 +1,4 @@
+import path from "node:path";
 import WebSocket from "ws";
 import {
   loadChannels,
@@ -49,6 +50,45 @@ export function chunk(text: string, max = MSG_LIMIT): string[] {
 export function parseCommand(text: string): { cmd: string; arg: string } | null {
   const m = text.match(/^\/([a-z]+)(?:@\w+)?\s*(.*)$/is);
   return m ? { cmd: m[1].toLowerCase(), arg: m[2].trim() } : null;
+}
+
+/** A downloadable attachment found in a Telegram message. */
+export interface TgAttachment {
+  fileId: string;
+  fileUniqueId: string;
+  kind: "image" | "file";
+  fileName?: string; // original name (documents only)
+  fileSize?: number; // bytes, when Telegram provides it
+}
+
+/** Extract the attachment of a message: a photo (largest size — Telegram
+ *  sorts sizes small → large) or any document (PDF, zip, image sent as
+ *  file…). Text-only messages → null. */
+export function attachmentOf(msg: any): TgAttachment | null {
+  if (Array.isArray(msg.photo) && msg.photo.length) {
+    const p = msg.photo[msg.photo.length - 1];
+    return { fileId: p.file_id, fileUniqueId: p.file_unique_id, kind: "image", fileSize: p.file_size };
+  }
+  const d = msg.document;
+  if (d?.file_id) {
+    return {
+      fileId: d.file_id,
+      fileUniqueId: d.file_unique_id,
+      kind: typeof d.mime_type === "string" && d.mime_type.startsWith("image/") ? "image" : "file",
+      ...(d.file_name ? { fileName: d.file_name } : {}),
+      ...(d.file_size != null ? { fileSize: d.file_size } : {}),
+    };
+  }
+  return null;
+}
+
+/** Storage name under ~/.shadok-ai/media: keep the original name so Claude
+ *  has context, prefix with file_unique_id to avoid collisions, and strip
+ *  anything path-ish or shell-hostile. */
+export function mediaFileName(att: TgAttachment): string {
+  const base = att.fileName ? path.basename(att.fileName).replace(/[^\w.\- ]+/g, "_") : "";
+  if (base) return `${att.fileUniqueId}-${base}`;
+  return att.kind === "image" ? `${att.fileUniqueId}.jpg` : att.fileUniqueId;
 }
 
 const htmlEscape = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
