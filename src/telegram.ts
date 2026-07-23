@@ -91,6 +91,14 @@ export function mediaFileName(att: TgAttachment): string {
   return att.kind === "image" ? `${att.fileUniqueId}.jpg` : att.fileUniqueId;
 }
 
+/** The prompt sent to the session for downloaded attachments: one absolute
+ *  path per line (Claude reads them itself — Read for images/PDF/text,
+ *  Bash for the rest), then the user's caption if any. */
+export function attachmentPrompt(items: { path: string; kind: "image" | "file" }[], caption?: string): string {
+  const lines = items.map((i) => (i.kind === "image" ? `[Image jointe : ${i.path}]` : `[Fichier joint : ${i.path}]`));
+  return caption?.trim() ? lines.join("\n") + "\n" + caption : lines.join("\n");
+}
+
 const htmlEscape = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
 /**

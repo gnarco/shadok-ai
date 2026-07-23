@@ -10,6 +10,7 @@ import {
   mdToTelegramHtml,
   attachmentOf,
   mediaFileName,
+  attachmentPrompt,
 } from "../src/telegram.js";
 
 test("bindKey: DM, group, and forum topic map to distinct keys", () => {
@@ -194,4 +195,28 @@ test("mediaFileName: nom original préfixé par l'id unique, nettoyé", () => {
 test("mediaFileName: photo sans nom → .jpg ; fichier sans nom → id nu", () => {
   assert.equal(mediaFileName({ fileId: "f", fileUniqueId: "AQAD", kind: "image" }), "AQAD.jpg");
   assert.equal(mediaFileName({ fileId: "f", fileUniqueId: "AQAD", kind: "file" }), "AQAD");
+});
+
+test("attachmentPrompt: image seule", () => {
+  assert.equal(attachmentPrompt([{ path: "/m/a.jpg", kind: "image" }]), "[Image jointe : /m/a.jpg]");
+});
+
+test("attachmentPrompt: fichier + caption", () => {
+  assert.equal(
+    attachmentPrompt([{ path: "/m/r.pdf", kind: "file" }], "résume ce doc"),
+    "[Fichier joint : /m/r.pdf]\nrésume ce doc",
+  );
+});
+
+test("attachmentPrompt: plusieurs pièces, caption vide ignorée", () => {
+  assert.equal(
+    attachmentPrompt(
+      [
+        { path: "/m/a.jpg", kind: "image" },
+        { path: "/m/b.zip", kind: "file" },
+      ],
+      "  ",
+    ),
+    "[Image jointe : /m/a.jpg]\n[Fichier joint : /m/b.zip]",
+  );
 });
