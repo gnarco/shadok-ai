@@ -145,6 +145,9 @@ export function startTelegram(port: number): void {
     .map((s) => s.trim())
     .filter(Boolean);
   const bridges = new Map<string, Bridge>();
+  // Names of topics we've seen created/renamed (chatId:threadId → name), so a
+  // manually-created topic keeps its name instead of the GUI defaulting it.
+  const topicNames = new Map<string, string>();
 
   const tg = async (method: string, params: object): Promise<any> => {
     try {
@@ -186,9 +189,11 @@ export function startTelegram(port: number): void {
   const persist = () => {
     for (const b of bridges.values()) {
       if (!b.sessionId) continue;
+      const existing = channelForTelegram(b.chatId, b.threadId);
       upsertChannel({
         sessionId: b.sessionId,
-        name: b.name,
+        // Seed the name from the topic once; never override a later rename.
+        ...(b.name && !existing?.name ? { name: b.name } : {}),
         telegram: { chatId: b.chatId, ...(b.threadId ? { threadId: b.threadId } : {}) },
       });
     }
@@ -311,11 +316,11 @@ export function startTelegram(port: number): void {
     return b;
   };
 
-  const bridgeFor = (key: string, chatId: number, threadId?: number): Bridge => {
+  const bridgeFor = (key: string, chatId: number, threadId?: number, name?: string): Bridge => {
     const existing = bridges.get(key);
     if (existing && existing.ws.readyState <= WebSocket.OPEN) return existing;
     const saved = channelForTelegram(chatId, threadId);
-    return openBridge(key, chatId, threadId, { resumeId: saved?.sessionId });
+    return openBridge(key, chatId, threadId, { resumeId: saved?.sessionId, name });
   };
 
   const promptTo = (b: Bridge, text: string) => {
@@ -433,11 +438,19 @@ export function startTelegram(port: number): void {
       }
     }
 
+    // A manually-created topic keeps its own name: take it from the cache
+    // (forum_topic_created) or the topic's root message, so the channel isn't
+    // named after the cwd. Only used to seed a nameless channel (see persist).
+    const topicName =
+      threadId != null
+        ? topicNames.get(key) ?? msg.reply_to_message?.forum_topic_created?.name
+        : undefined;
+
     // Optimistic typing: start the heartbeat now, before the server confirms
     // anything — spawning/resuming a session can take tens of seconds and the
     // first "working" only arrives after it. Every terminal outcome stops it
     // (turn-done, dialog, pace-blocked, exited, ws close).
-    const b = bridgeFor(key, chat.id, threadId);
+    const b = bridgeFor(key, chat.id, threadId, topicName);
     b.typing.start();
     promptTo(b, msg.text);
   };
@@ -456,10 +469,22 @@ export function startTelegram(port: number): void {
     else b.pendingActions.push(wsMsg);
   };
 
+  // A topic created in Telegram → remember its name so a session bound to it
+  // later adopts it (and seed the channel if one already exists).
+  const handleTopicCreated = (msg: any) => {
+    const name = msg.forum_topic_created?.name;
+    if (typeof name !== "string" || !name) return;
+    const key = bindKey(msg.chat, msg.message_thread_id);
+    topicNames.set(key, name);
+    const ch = channelForTelegram(msg.chat.id, msg.message_thread_id);
+    if (ch && !ch.name) upsertChannel({ sessionId: ch.sessionId, name });
+  };
+
   // A topic renamed in Telegram → update the one registry so the web tab follows.
   const handleTopicEdited = (msg: any) => {
     const name = msg.forum_topic_edited?.name;
     if (typeof name !== "string" || !name) return;
+    topicNames.set(bindKey(msg.chat, msg.message_thread_id), name);
     const ch = channelForTelegram(msg.chat.id, msg.message_thread_id);
     if (ch) upsertChannel({ sessionId: ch.sessionId, name });
   };
@@ -479,6 +504,7 @@ export function startTelegram(port: number): void {
 
   const handleUpdate = async (u: any) => {
     if (u.callback_query) return handleCallback(u.callback_query);
+    if (u.message?.forum_topic_created) return handleTopicCreated(u.message);
     if (u.message?.forum_topic_edited) return handleTopicEdited(u.message);
     if (u.message?.forum_topic_closed || u.message?.forum_topic_deleted)
       return handleTopicClosed(u.message);
