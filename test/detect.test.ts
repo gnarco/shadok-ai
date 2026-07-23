@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { screenShowsWork, inputHasProbe } from "../src/detect.js";
+import { screenShowsWork, inputHasProbe, inputText } from "../src/detect.js";
 
 const idle = [
   "⏺ Done.",
@@ -69,4 +69,15 @@ test("inputHasProbe: false when the probe is only in scrollback, not the input l
   // A fast turn: the echo is still visible above but the box is empty.
   const scrolled = "❯ Refactor the parser now\n⏺ done.\n\n❯ \n";
   assert.equal(inputHasProbe(scrolled, "Refactor the par"), false);
+});
+
+test("inputText: reads the ❯ input box and strips the prompt", () => {
+  assert.equal(inputText("history\n❯ hello world\n\n  footer"), "hello world");
+  assert.equal(inputText("❯ "), "");
+});
+
+test("inputText: shell mode — the '!' box padded with a non-breaking space", () => {
+  // The TUI pads the shell prompt with U+00A0, not a regular space.
+  assert.equal(inputText("────\n!  echo hi\n────\n  ! for shell mode"), "echo hi");
+  assert.equal(inputText("! \n────\n  ! for shell mode"), ""); // empty shell box
 });

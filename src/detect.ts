@@ -52,7 +52,14 @@ export function inputHasProbe(screen: string, probe: string): boolean {
  * literal text isn't on screen to look for).
  */
 export function inputText(screen: string): string {
-  const promptLines = screen.split("\n").filter((l) => l.trimStart().startsWith("❯"));
-  const inputLine = promptLines[promptLines.length - 1] ?? "";
-  return inputLine.replace(/^\s*❯\s?/, "").trim();
+  // The input box is the "❯ …" line, or in shell mode the "! …" line at column
+  // 0 — where the TUI pads the prompt with a NON-BREAKING space (U+00A0), not a
+  // regular one, so match `\s` (which includes it), never a literal " ". (The
+  // "  ! for shell mode" hint is indented, so requiring the bang at column 0
+  // excludes it.)
+  let inputLine = "";
+  for (const l of screen.split("\n")) {
+    if (l.trimStart().startsWith("❯") || /^!\s/.test(l)) inputLine = l;
+  }
+  return inputLine.replace(/^\s*[❯!]\s*/, "").trim();
 }
