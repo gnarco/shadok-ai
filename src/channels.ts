@@ -57,3 +57,11 @@ export function loadGroups(): any[] {
 export function saveGroups(list: any[]): void {
   writeJson("groups", list);
 }
+
+/** Telegram chat/topic → session bindings, persisted per launch directory. */
+export function loadTgBindings(): any[] {
+  return readJson("telegram");
+}
+export function saveTgBindings(list: any[]): void {
+  writeJson("telegram", list);
+}
