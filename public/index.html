@@ -1065,6 +1065,7 @@
     // attached to the session anymore (and "End session" stops it
     // explicitly for everyone).
     if (tab.ws && tab.ws.readyState === WebSocket.OPEN) tab.ws.close();
+    if (tab.sessionId) dismissedChannels.add(tab.sessionId); // don't let the sync re-add it
     dropDraft(tab);
     tab.btnEl.remove();
     tab.transcriptEl.remove();
@@ -1323,25 +1324,46 @@
     }
   }, 1000);
 
-  // Keep tab names in sync with the server registry (a rename from Telegram or
-  // another browser). The server owns the name; skip a tab that's mid-rename.
-  async function syncChannelNames() {
+  // Session ids the user closed here, so the sync poll doesn't re-add them (a
+  // Telegram/live channel survives a client PUT, so it stays in the registry).
+  const dismissedChannels = new Set();
+
+  // Reconcile the open tabs with the server registry every few seconds — the ONE
+  // source of truth. A new session (e.g. a Telegram /spawn) shows up as a tab
+  // live; a renamed channel (from Telegram or another browser) renames its tab.
+  async function syncChannels() {
     if (restoring) return;
     let chans;
     try { chans = await (await fetch("/channels")).json(); } catch { return; }
     if (!Array.isArray(chans)) return;
-    const byId = new Map(chans.map((c) => [c.sessionId, c]));
-    for (const t of tabs) {
-      if (!t.sessionId || t.btnEl.querySelector("input.rename")) continue;
-      const c = byId.get(t.sessionId);
-      if (c && c.name && c.name !== t.nameEl.textContent) {
-        t.customName = true;
-        t.nameEl.textContent = c.name;
-        saveName(t, c.name);
+    const tabById = new Map(tabs.filter((t) => t.sessionId).map((t) => [t.sessionId, t]));
+    for (const c of chans) {
+      if (!c.sessionId) continue;
+      const t = tabById.get(c.sessionId);
+      if (t) {
+        if (c.name && c.name !== t.nameEl.textContent && !t.btnEl.querySelector("input.rename")) {
+          t.customName = true;
+          t.nameEl.textContent = c.name;
+          saveName(t, c.name);
+        }
+      } else if (!dismissedChannels.has(c.sessionId)) {
+        const nt = createTab(c.group);
+        nt.sessionId = c.sessionId;
+        if (c.branch) nt.branch = c.branch;
+        if (c.name) {
+          nt.customName = true;
+          nt.nameEl.textContent = c.name;
+        }
+        launchTab(nt, {
+          cwd: c.cwd,
+          resume: c.sessionId,
+          branch: c.branch || undefined,
+          repo: c.repo || serverCwd || undefined,
+        });
       }
     }
   }
-  setInterval(syncChannelNames, 4000);
+  setInterval(syncChannels, 4000);
 
   function activate(tab) {
     if (active && active !== tab) {
