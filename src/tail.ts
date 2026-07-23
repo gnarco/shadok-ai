@@ -23,10 +23,49 @@ export type TailEvent =
 /** Max characters of a tool result to stream (long outputs are truncated). */
 const MAX_RESULT = 4000;
 
-/** Path of the .jsonl transcript Claude Code writes for a session. */
+/**
+ * Path of the .jsonl transcript Claude Code writes for a session.
+ *
+ * The obvious path is `<encoded cwd>/<id>.jsonl`, but Claude derives the
+ * encoded dir from the cwd it was LAUNCHED with. After a repo/worktree move
+ * (or the shadok-ai rename) a still-running agent keeps writing under its
+ * original encoded dir, which no longer matches the current cwd — so the tail
+ * would watch a stale file and nothing streams. To be immune to that drift we
+ * prefer the newest `<id>.jsonl` found anywhere under ~/.claude/projects; the
+ * file being actively appended is always the newest. Falls back to the
+ * cwd-derived path for a brand-new session whose file doesn't exist yet.
+ */
 export function sessionFilePath(cwd: string, sessionId: string): string {
+  const newest = newestTranscriptById(sessionId);
+  if (newest) return newest;
   const encoded = path.resolve(cwd).replace(/[^a-zA-Z0-9]/g, "-");
   return path.join(os.homedir(), ".claude", "projects", encoded, sessionId + ".jsonl");
+}
+
+/** The most-recently-modified `<id>.jsonl` across all project dirs, or null. */
+export function newestTranscriptById(sessionId: string): string | null {
+  const root = path.join(os.homedir(), ".claude", "projects");
+  let best: string | null = null;
+  let bestMtime = -1;
+  let dirs: string[];
+  try {
+    dirs = fs.readdirSync(root);
+  } catch {
+    return null;
+  }
+  for (const d of dirs) {
+    const f = path.join(root, d, sessionId + ".jsonl");
+    try {
+      const m = fs.statSync(f).mtimeMs;
+      if (m > bestMtime) {
+        bestMtime = m;
+        best = f;
+      }
+    } catch {
+      /* no such file in this dir */
+    }
+  }
+  return best;
 }
 
 /** One-line summary of a tool_use block (e.g. `Read auth.ts`, `Bash: npm test`). */
