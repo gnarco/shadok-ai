@@ -1,6 +1,6 @@
 # Telegram control — design
 
-Date: 2026-07-23 · Status: approved (increment 1)
+Date: 2026-07-23 · Status: increments 1 & 2 shipped (PRs #2, #3)
 
 ## Goal
 
@@ -56,11 +56,15 @@ Telegram  ──getUpdates(poll)──▶  telegram.ts  ──ws://localhost/ws�
 
 ## Increment plan
 
-1. **This PR** — bridge skeleton: long-poll, DM = session, text prompt →
+1. **Done (PR #2)** — bridge skeleton: long-poll, DM = session, text prompt →
    streamed text reply → turn-done, binding persistence, `/new` `/end` `/list`.
    Pure helpers unit-tested (update parsing, key derivation, chunking).
-2. Forum topics + `/spawn` + auto-configure channels in a group.
-3. Dialogs as inline keyboards; tool/result lines; worktree spawns; notifications.
+2. **Done (PR #3)** — forum topics + `/setup` (bind the single board group,
+   one group per instance) + `/spawn <name>` (createForumTopic → isolated
+   worktree agent), dialogs as inline keyboards (`callback_query` →
+   choose/toggle/confirm), `stream-tool` lines. `dialogKeyboard`/`parseCallback`
+   unit-tested.
+3. (later) notifications on turn-done when idle; `/cwd` override; media.
 
 ## Non-goals (for now)
 
