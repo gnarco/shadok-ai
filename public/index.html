@@ -766,6 +766,7 @@
   #secretsAdd { display: flex; gap: 8px; }
   #secretsAdd input { flex: 1; min-width: 0; padding: 6px 8px; border-radius: 6px; border: 1px solid rgba(255,255,255,.15); background: rgba(0,0,0,.25); color: inherit; }
   #secretsAdd button { padding: 6px 12px; border-radius: 6px; border: 1px solid rgba(255,255,255,.15); background: rgba(255,255,255,.08); color: inherit; cursor: pointer; }
+  #secretsRestart { margin-top: 12px; width: 100%; padding: 8px; border-radius: 6px; border: 1px solid rgba(255,255,255,.15); background: rgba(255,255,255,.06); color: inherit; cursor: pointer; }
 </style>
 </head>
 <body>
@@ -821,6 +822,7 @@
       <input id="secretVal" placeholder="value" autocomplete="off" spellcheck="false" />
       <button type="submit">Add</button>
     </form>
+    <button id="secretsRestart" title="Restart this agent so it picks up the secrets">↻ Restart this agent to apply</button>
   </div>
 </div>
 
@@ -2442,6 +2444,12 @@
     $("secretKey").value = ""; $("secretVal").value = "";
     renderSecrets(data);
     $("secretKey").focus();
+  });
+  $("secretsRestart").addEventListener("click", () => {
+    if (active && active.ws && active.ws.readyState === WebSocket.OPEN) {
+      active.ws.send(JSON.stringify({ type: "restart" }));
+    }
+    $("secretsOverlay").hidden = true;
   });
   newTabBtn.addEventListener("click", () => createTab());
   newGroupBtn.addEventListener("click", () => {

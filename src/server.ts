@@ -172,6 +172,7 @@ type ClientMessage =
   | { type: "freetext"; n: number; text: string }
   | { type: "key"; key: string }
   | { type: "settle" }
+  | { type: "restart" }
   | { type: "stop" };
 
 /**
@@ -212,6 +213,12 @@ interface Live {
   contextPct: number | null;
   /** Stops the .jsonl tail loop (content streaming). */
   stopTail: (() => void) | null;
+  /** Unsubscribes the current pilot's exit handler (so a restart can swap the
+   *  pilot without the old handler tearing the session down). */
+  pilotOff?: (() => void) | null;
+  /** True while a restart is swapping the pilot in place — suppresses the old
+   *  pilot's exit teardown. */
+  restarting?: boolean;
   /** Isolated git worktree, when the session runs in one. */
   worktree: Worktree | null;
   /** Reclaim timer armed when no client is attached. */
@@ -317,7 +324,21 @@ async function createSession(
     turnStartedAt: null,
     lastTurnMs: null,
   };
-  pilot.onExit((code) => {
+  await attachPilot(s);
+  return s;
+}
+
+/**
+ * Wires a session's pilot: exit handling, content tail, screen watcher, and the
+ * wait-until-up handshake. Split out of createSession so a restart can swap in a
+ * fresh pilot (e.g. to pick up new env/secrets) on the SAME Live object — every
+ * WS client keeps its reference, so nobody is disconnected.
+ */
+async function attachPilot(s: Live): Promise<void> {
+  const pilot = s.pilot;
+  const { id, cwd } = s;
+  s.pilotOff = pilot.onExit((code) => {
+    if (s.restarting) return; // a restart is swapping the pilot; don't tear down
     broadcast(s, { type: "exited", code });
     destroySession(s);
   });
@@ -390,7 +411,6 @@ async function createSession(
   }
   settled = true;
   sessions.set(id, s);
-  return s;
 }
 
 /**
@@ -848,6 +868,39 @@ wss.on("connection", (ws: WebSocket) => {
           break;
         }
 
+        case "restart": {
+          // Re-spawn the agent in place, resuming the same session id, so it
+          // picks up fresh env (e.g. newly-added secrets). History is preserved
+          // (resume reads the transcript); every attached client keeps its ref.
+          if (!session) return fail("no session started");
+          const s = session;
+          s.restarting = true;
+          s.pilotOff?.();
+          if (s.screenTimer) clearInterval(s.screenTimer);
+          s.screenTimer = null;
+          s.stopTail?.();
+          s.stopTail = null;
+          if (s.retryTimer) clearTimeout(s.retryTimer);
+          s.retryTimer = null;
+          // Clean /exit (not a hard kill) so claude releases the session lock
+          // and `--resume` works; then make sure the tmux session is gone.
+          await s.pilot.stop();
+          if (USE_TMUX) {
+            for (let i = 0; i < 30 && tmuxHasSession("sk-" + s.id); i++) await sleep(100);
+          }
+          s.busy = false;
+          s.lastScreen = "";
+          broadcast(s, { type: "working", startedAt: Date.now() });
+          // Resume only if there's a transcript; a never-used session has
+          // nothing to resume (claude --resume would exit) — re-create it.
+          const hasTranscript = fs.existsSync(sessionFilePath(s.cwd, s.id));
+          s.pilot = makePilot(s.id, s.cwd, hasTranscript ? ["--resume", s.id] : ["--session-id", s.id]);
+          await attachPilot(s);
+          s.restarting = false;
+          broadcast(s, { type: "ready", sessionId: s.id, cwd: s.cwd, branch: s.worktree?.branch ?? null });
+          broadcast(s, { type: "screen", text: s.pilot.screen(), working: s.pilot.isWorking() });
+          break;
+        }
         case "stop": {
           // Explicit stop: ends the session for ALL clients, drops it from the
           // one registry, and archives its Telegram topic if it had one.
