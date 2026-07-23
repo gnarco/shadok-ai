@@ -463,12 +463,9 @@ export function startTelegram(port: number): void {
           return;
         }
         case "update": {
-          // Powerful (npm install + respawn): board group only. The allowlist,
-          // if set, was already enforced at the top of handleMessage.
-          if (!isGroup) {
-            await reply(chat.id, threadId, "/update runs in the board group.");
-            return;
-          }
+          // Powerful (npm install + respawn), but instance-wide and non-
+          // destructive: allowed from a DM (the operator) or the board group.
+          // The allowlist, if set, was already enforced at the top.
           await reply(chat.id, threadId, "🔄 updating… I'll be back in a moment.");
           // Ask the supervisor to fetch @latest and respawn us.
           process.exit(UPDATE_EXIT_CODE);
