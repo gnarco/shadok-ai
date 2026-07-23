@@ -7,13 +7,21 @@
     "build": "tsc",
     "dev": "tsx src/cli.ts",
     "postinstall": "chmod +x node_modules/node-pty/prebuilds/darwin-*/spawn-helper 2>/dev/null || true",
+    "prepublishOnly": "npm run build",
     "web": "node dist/server.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "description": "Drives a Claude Code TUI session through a pseudo-terminal",
+  "description": "Web cockpit that drives multiple real Claude Code TUI sessions in parallel, with Telegram control",
   "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "dist",
+    "public"
+  ],
   "dependencies": {
     "@xterm/headless": "^6.0.0",
     "express": "^5.2.1",
@@ -30,6 +38,7 @@
   },
   "types": "dist/session.d.ts",
   "bin": {
-    "shadok-ai": "dist/cli.js"
+    "shadok-ai": "dist/main.js",
+    "shadok-ai-run": "dist/cli.js"
   }
 }

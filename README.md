@@ -5,6 +5,19 @@
 > are the current source of truth. This README covers the original single-session
 > library/CLI; shadok-ai is now a multi-session web cockpit (see those docs).
 
+## Quick start
+
+```bash
+npx shadok-ai            # first run asks once for an optional Telegram bot token
+```
+
+Open **http://localhost:3789**. To drive agents from Telegram, send the bot to a
+group with Topics enabled and type `/setup` there; then `/spawn <name>` per agent.
+Keep it current with `/update` (fetches `@latest` and respawns itself). Flags:
+`--port <n>`, `--no-telegram`, `--version`.
+
+---
+
 Drives a **Claude Code TUI** session (the interactive `claude` CLI) from Node.js, through a pseudo-terminal.
 
 > ⚠️ The Claude Code TUI is not a stable API: a CLI update can break the

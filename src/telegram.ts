@@ -1,5 +1,7 @@
 import WebSocket from "ws";
 import { loadTgBindings, saveTgBindings, loadTgGroup, saveTgGroup } from "./channels.js";
+import { readAndClearUpdateResult } from "./update-flag.js";
+import { UPDATE_EXIT_CODE } from "./supervisor.js";
 
 /**
  * Telegram control bridge. Runs inside the server process (only when
@@ -324,6 +326,17 @@ export function startTelegram(port: number): void {
           await reply(chat.id, threadId, lines.length ? lines.join("\n") : "no sessions bound yet.");
           return;
         }
+        case "update": {
+          // Powerful (npm install + respawn): board group only. The allowlist,
+          // if set, was already enforced at the top of handleMessage.
+          if (!isGroup) {
+            await reply(chat.id, threadId, "/update runs in the board group.");
+            return;
+          }
+          await reply(chat.id, threadId, "🔄 updating… I'll be back in a moment.");
+          // Ask the supervisor to fetch @latest and respawn us.
+          process.exit(UPDATE_EXIT_CODE);
+        }
       }
     }
 
@@ -365,8 +378,18 @@ export function startTelegram(port: number): void {
     if (me?.ok) {
       console.log(`telegram: bot @${me.result.username} connected (long-polling)`);
       poll();
+      announceUpdateResult();
     } else {
       console.log("telegram: getMe failed — check TELEGRAM_BOT_TOKEN");
     }
   });
+
+  /** After a supervisor-driven /update, tell the board group how it went. */
+  function announceUpdateResult(): void {
+    const r = readAndClearUpdateResult();
+    const group = loadTgGroup();
+    if (!r || group === null) return;
+    const text = r.ok ? `✅ updated to v${r.version}` : `⚠️ update failed: ${r.error}`;
+    tg("sendMessage", { chat_id: group, text });
+  }
 }
