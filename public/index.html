@@ -1061,21 +1061,15 @@
   }
 
   function closeTab(tab) {
-    // Detach only: the server stops the claude process when no client is
-    // attached to the session anymore (and "End session" stops it
-    // explicitly for everyone).
-    if (tab.ws && tab.ws.readyState === WebSocket.OPEN) tab.ws.close();
-    if (tab.sessionId) dismissedChannels.add(tab.sessionId); // don't let the sync re-add it
-    dropDraft(tab);
-    tab.btnEl.remove();
-    tab.transcriptEl.remove();
-    tabs = tabs.filter((t) => t !== tab);
-    persistChannels();
-    refreshTitle();
-    if (active === tab) {
-      if (tabs.length) activate(tabs[tabs.length - 1]);
-      else createTab();
+    // Full close: end the channel everywhere (stop the agent, archive its
+    // Telegram topic, drop it from the registry) — the server does that on
+    // `stop`. Then remove the tab locally. `dismissed` stops the sync poll from
+    // re-adding it in the brief window before the registry updates.
+    if (tab.sessionId) dismissedChannels.add(tab.sessionId);
+    if (tab.ws && tab.ws.readyState === WebSocket.OPEN) {
+      tab.ws.send(JSON.stringify({ type: "stop" }));
     }
+    removeTabLocal(tab);
   }
 
   /**
