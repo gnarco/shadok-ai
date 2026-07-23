@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { newestTranscriptById } from "./tail.js";
 
 /**
  * Extracts the response: everything after the "❯ <prompt>" echo in the
@@ -133,14 +134,12 @@ export interface HistoryTurn {
  * be replayed when resuming the session.
  */
 export function loadHistory(cwd: string, sessionId: string): HistoryTurn[] {
+  // Same drift-immunity as the tail: prefer the newest <id>.jsonl anywhere, so a
+  // moved/renamed worktree's history still resolves (see sessionFilePath).
   const encoded = path.resolve(cwd).replace(/[^a-zA-Z0-9]/g, "-");
-  const file = path.join(
-    os.homedir(),
-    ".claude",
-    "projects",
-    encoded,
-    sessionId + ".jsonl",
-  );
+  const file =
+    newestTranscriptById(sessionId) ??
+    path.join(os.homedir(), ".claude", "projects", encoded, sessionId + ".jsonl");
   let raw: string;
   try {
     raw = fs.readFileSync(file, "utf8");
