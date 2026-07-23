@@ -1323,6 +1323,26 @@
     }
   }, 1000);
 
+  // Keep tab names in sync with the server registry (a rename from Telegram or
+  // another browser). The server owns the name; skip a tab that's mid-rename.
+  async function syncChannelNames() {
+    if (restoring) return;
+    let chans;
+    try { chans = await (await fetch("/channels")).json(); } catch { return; }
+    if (!Array.isArray(chans)) return;
+    const byId = new Map(chans.map((c) => [c.sessionId, c]));
+    for (const t of tabs) {
+      if (!t.sessionId || t.btnEl.querySelector("input.rename")) continue;
+      const c = byId.get(t.sessionId);
+      if (c && c.name && c.name !== t.nameEl.textContent) {
+        t.customName = true;
+        t.nameEl.textContent = c.name;
+        saveName(t, c.name);
+      }
+    }
+  }
+  setInterval(syncChannelNames, 4000);
+
   function activate(tab) {
     if (active && active !== tab) {
       active.draft = promptInput.value;

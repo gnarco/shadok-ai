@@ -26,7 +26,7 @@ import {
   removeChannel,
   mergeClientChannels,
 } from "./channels.js";
-import { startTelegram } from "./telegram.js";
+import { startTelegram, renameTelegramTopic } from "./telegram.js";
 import { migrateTgBindings } from "./channels.js";
 import {
   createWorktree,
@@ -107,7 +107,15 @@ app.put("/channels", (req, res) => {
   // Merge, don't overwrite: the browser owns order + name/group, but must never
   // drop a live or Telegram-bound session or strip server-owned fields.
   const live = new Set([...sessions.values()].filter((s) => !s.pilot.hasExited).map((s) => s.id));
-  res.json(mergeClientChannels(Array.isArray(req.body) ? req.body : [], live));
+  const before = new Map(loadChannels().map((c) => [c.sessionId, c.name]));
+  const merged = mergeClientChannels(Array.isArray(req.body) ? req.body : [], live);
+  // A web-side rename of a Telegram-bound channel → rename its topic too.
+  for (const c of merged) {
+    if (c.telegram?.threadId && c.name && c.name !== before.get(c.sessionId)) {
+      renameTelegramTopic(c.telegram.chatId, c.telegram.threadId, c.name);
+    }
+  }
+  res.json(merged);
 });
 app.get("/groups", (_req, res) => res.json(loadGroups()));
 app.put("/groups", (req, res) => {

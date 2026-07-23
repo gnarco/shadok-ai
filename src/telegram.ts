@@ -120,6 +120,16 @@ interface Bridge {
   typing: { start: () => void; stop: () => void }; // "typing…" heartbeat for the running turn
 }
 
+/**
+ * Rename a Telegram forum topic to match a channel renamed elsewhere (the web
+ * UI). Wired up by startTelegram; a no-op when Telegram is off. Lets the server
+ * push a web-side rename to Telegram without importing its token/closure.
+ */
+let renameTopicImpl: ((chatId: number, threadId: number, name: string) => void) | null = null;
+export function renameTelegramTopic(chatId: number, threadId: number, name: string): void {
+  renameTopicImpl?.(chatId, threadId, name);
+}
+
 export function startTelegram(port: number): void {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   if (!token) return;
@@ -141,6 +151,11 @@ export function startTelegram(port: number): void {
     } catch {
       return null;
     }
+  };
+
+  // Web-side rename → rename the matching Telegram topic (best effort).
+  renameTopicImpl = (chatId, threadId, name) => {
+    tg("editForumTopic", { chat_id: chatId, message_thread_id: threadId, name: name.slice(0, 128) });
   };
 
   const send = async (b: Bridge, text: string) => {
@@ -430,8 +445,17 @@ export function startTelegram(port: number): void {
     else b.pendingActions.push(wsMsg);
   };
 
+  // A topic renamed in Telegram → update the one registry so the web tab follows.
+  const handleTopicEdited = (msg: any) => {
+    const name = msg.forum_topic_edited?.name;
+    if (typeof name !== "string" || !name) return;
+    const ch = channelForTelegram(msg.chat.id, msg.message_thread_id);
+    if (ch) upsertChannel({ sessionId: ch.sessionId, name });
+  };
+
   const handleUpdate = async (u: any) => {
     if (u.callback_query) return handleCallback(u.callback_query);
+    if (u.message?.forum_topic_edited) return handleTopicEdited(u.message);
     if (u.message) return handleMessage(u.message);
   };
 
