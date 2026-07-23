@@ -42,7 +42,7 @@ UI: **http://localhost:3789**. Logs: `/tmp/cp.log`. Health: `curl -s -o /dev/nul
 |---|---|
 | `src/server.ts` | HTTP + WebSocket server. Session registry (`sessions` Map), the `Live` object, the WS message handlers, all endpoints. The hub. |
 | `src/session.ts` | `PtyPilot` — drives `claude` in a **node-pty** PTY + `@xterm/headless`. Dies with the server. |
-| `src/tmux.ts` | `TmuxPilot` — same interface as `PtyPilot`, but runs `claude` in a **detached tmux session** (`cp-<sessionId>`). **Survives server restart** (reattaches). Default transport when tmux is present. |
+| `src/tmux.ts` | `TmuxPilot` — same interface as `PtyPilot`, but runs `claude` in a **detached tmux session** (`sk-<sessionId>`). **Survives server restart** (reattaches). Default transport when tmux is present. |
 | `src/tail.ts` | Tails a session's `.jsonl` transcript → streams assistant text/tool_use/tool_result + token usage. **This is the source of truth for content**, not the screen. |
 | `src/extract.ts` | Parse the transcript / screen: `loadHistory`, `detectDialog`, `listSessions`, `findSessionId`. |
 | `src/detect.ts` | `screenShowsWork(screen)` — the fragile "is Claude working" heuristic. |
@@ -53,6 +53,7 @@ UI: **http://localhost:3789**. Logs: `/tmp/cp.log`. Health: `curl -s -o /dev/nul
 | `src/channels.ts` | Server-side persistence of the channel + group lists, keyed by launch dir. |
 | `src/cli.ts` | One-shot CLI (`node dist/cli.js "prompt"`), separate from the server. |
 | `public/index.html` | The entire web client (no framework, no build). Channels, groups, dialogs, engine room, diff panel, pace/usage gauges, context bars. |
+| `context/pilot-prompt.md` | System prompt appended to **every piloted session** via `--append-system-prompt` (wired in `makePilot`, server.ts). Tells the agent it runs under the cockpit (chat rendering, sibling sessions, worktree discipline). `SHADOK_PILOT_PROMPT=0` disables. |
 | `.claude/skills/shadok-ai-agents/pilotctl.mjs` | Thin client that lets an agent spawn/pilot other agents through the server (used by the `shadok-ai-agents` skill). |
 
 ## Core model
