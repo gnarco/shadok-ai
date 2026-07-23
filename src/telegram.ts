@@ -163,9 +163,10 @@ export function startTelegram(port: number): void {
   renameTopicImpl = (chatId, threadId, name) => {
     tg("editForumTopic", { chat_id: chatId, message_thread_id: threadId, name: name.slice(0, 128) });
   };
-  // Session ended elsewhere → archive its topic (idempotent; ignore errors).
+  // Session ended elsewhere → delete its topic so it disappears from the group
+  // (the bot created it, so it can). Irreversible; ignore errors.
   closeTopicImpl = (chatId, threadId) => {
-    tg("closeForumTopic", { chat_id: chatId, message_thread_id: threadId });
+    tg("deleteForumTopic", { chat_id: chatId, message_thread_id: threadId });
   };
 
   const send = async (b: Bridge, text: string) => {
