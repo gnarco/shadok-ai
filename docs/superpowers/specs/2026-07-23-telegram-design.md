@@ -4,19 +4,19 @@ Date: 2026-07-23 · Status: increments 1 & 2 shipped (PRs #2, #3)
 
 ## Goal
 
-Pilot claudepilot agents from Telegram (two-way), so the durable tmux agents
+Pilot shadok-ai agents from Telegram (two-way), so the durable tmux agents
 are controllable from a phone without the web UI.
 
 ## Mapping (decided)
 
-- **1 claudepilot instance = 1 Telegram bot** (`TELEGRAM_BOT_TOKEN`).
+- **1 shadok-ai instance = 1 Telegram bot** (`TELEGRAM_BOT_TOKEN`).
 - **1 DM (private chat) = 1 session.**
 - **1 forum topic in a group = 1 session** (`message_thread_id`). The bot
   **creates topics itself** (`createForumTopic`) so it configures its own
   channels — a group becomes a board of agents, one topic each.
 - Binding key: `private:<chatId>` or `topic:<chatId>:<threadId>` → sessionId.
   Persisted per launch directory in
-  `~/.claudepilot/channels/<encoded cwd>-telegram.json`, so it survives
+  `~/.shadok-ai/channels/<encoded cwd>-telegram.json`, so it survives
   restarts like the web channel list.
 
 ## Architecture — Telegram is just another client

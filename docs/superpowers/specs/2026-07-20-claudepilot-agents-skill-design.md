@@ -1,11 +1,11 @@
-# Skill `claudepilot-agents` — design
+# Skill `shadok-ai-agents` — design
 
 Date : 2026-07-20
 Statut : validé (brainstorming avec l'utilisateur)
 
 ## Objectif
 
-Permettre à Claude Code de créer et piloter des agents claudepilot via le
+Permettre à Claude Code de créer et piloter des agents shadok-ai via le
 serveur web (protocole WebSocket documenté dans le README) : lancer un agent
 dans un worktree git isolé, lui envoyer des prompts, lire ses réponses,
 répondre à ses dialogs interactifs, récupérer son diff, le stopper. Les
@@ -23,19 +23,19 @@ sessions restent visibles et pilotables en parallèle dans l'UI web
   intégrée (les agents parallèles se pilotent en lançant plusieurs
   commandes).
 - **Emplacement** : skill de projet, versionnée dans ce repo sous
-  `.claude/skills/claudepilot-agents/`.
+  `.claude/skills/shadok-ai-agents/`.
 - **Serveur absent** : démarrage automatique en arrière-plan (build si
   nécessaire), attente du port, puis poursuite.
 - **Architecture** : approche « thin client » — un helper `pilotctl.mjs`
   livré avec la skill encapsule le protocole en commandes one-shot à sortie
-  JSON. Pas de daemon persistant : le serveur claudepilot est la source de
+  JSON. Pas de daemon persistant : le serveur shadok-ai est la source de
   vérité (état des sessions, resumabilité), chaque commande se connecte,
   agit, se détache.
 
 ## Structure
 
 ```
-.claude/skills/claudepilot-agents/
+.claude/skills/shadok-ai-agents/
   SKILL.md        # instructions : quand utiliser, commandes, flux types, pièges
   pilotctl.mjs    # thin client WS/HTTP ; seule dépendance : "ws" (déjà dans le repo)
 ```
@@ -43,7 +43,7 @@ sessions restent visibles et pilotables en parallèle dans l'UI web
 `pilotctl.mjs` est un module ESM situé dans le repo : `import WebSocket from
 "ws"` se résout en remontant vers le `node_modules` du repo (Node 20 n'a pas
 de client WebSocket global stable). Le script s'exécute avec
-`node .claude/skills/claudepilot-agents/pilotctl.mjs <commande> …`.
+`node .claude/skills/shadok-ai-agents/pilotctl.mjs <commande> …`.
 
 ## Commandes de `pilotctl.mjs`
 
@@ -67,12 +67,12 @@ Sortie : un objet JSON sur stdout ; exit code 0 en succès, ≠ 0 en erreur
 ### Démarrage automatique du serveur
 
 Chaque commande commence par un health-check HTTP sur
-`http://localhost:${CLAUDEPILOT_PORT ?? 3789}`. Si le serveur ne répond
+`http://localhost:${SHADOK_PORT ?? 3789}`. Si le serveur ne répond
 pas :
 
 1. `npm run build` dans le repo si `dist/server.js` est absent ;
 2. lancement détaché de `node dist/server.js` (stdout/stderr vers un log
-   sous `~/.claudepilot/`) ;
+   sous `~/.shadok-ai/`) ;
 3. attente active du port (timeout ~15 s), puis poursuite de la commande ;
 4. échec persistant → `{error}` explicite, exit ≠ 0.
 
@@ -81,7 +81,7 @@ Le serveur lancé reste up ensuite (il sert aussi l'UI web).
 ## Contenu de SKILL.md
 
 - **Quand utiliser** : déléguer une tâche à un agent Claude isolé dans un
-  worktree, piloter/inspecter des sessions claudepilot existantes.
+  worktree, piloter/inspecter des sessions shadok-ai existantes.
 - **Flux type « créer un agent »** : `spawn --worktree --cwd <repo>` →
   `prompt <id> "<tâche>"` lancé via Bash en `run_in_background` (les tours
   peuvent durer plusieurs minutes) → à la notification, lire le JSON ; si
@@ -90,7 +90,7 @@ Le serveur lancé reste up ensuite (il sert aussi l'UI web).
 - **Garde-fous** :
   - ne jamais `stop` une session que la conversation courante n'a pas
     créée (elle appartient peut-être à l'utilisateur dans l'UI web) ;
-  - la branche `claudepilot/<tag>` et son worktree ne sont jamais mergés ni
+  - la branche `shadok-ai/<tag>` et son worktree ne sont jamais mergés ni
     supprimés automatiquement — c'est l'utilisateur qui merge ;
   - chaque agent consomme le quota Claude comme une session normale : ne
     pas multiplier les agents sans demande explicite ;
@@ -110,7 +110,7 @@ Le serveur lancé reste up ensuite (il sert aussi l'UI web).
 ## Test de validation (manuel, de bout en bout)
 
 1. `spawn --worktree` sur un repo jouet → `sessionId` + `branch` retournés,
-   worktree créé sous `~/.claudepilot/worktrees/` ;
+   worktree créé sous `~/.shadok-ai/worktrees/` ;
 2. `prompt` simple (« crée un fichier hello.txt ») → `answer` reçu (en
    répondant aux éventuels dialogs de permission via `choose`) ;
 3. `diff` → le fichier apparaît dans le diff ;

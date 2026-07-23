@@ -11,7 +11,7 @@ import {
   gitDiff,
 } from "../src/worktree.js";
 
-/** A throwaway git repo + temp HOME (worktrees land under ~/.claudepilot). */
+/** A throwaway git repo + temp HOME (worktrees land under ~/.shadok-ai). */
 function withRepo(fn: (repo: string) => void) {
   const prevHome = process.env.HOME;
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "cp-wt-home-"));
@@ -52,7 +52,7 @@ test("isGitRepo: true inside a repo, false outside", () => {
 test("createWorktree: isolated checkout on a fresh branch off HEAD", () => {
   withRepo((repo) => {
     const wt = createWorktree(repo, "abcd1234");
-    assert.equal(wt.branch, "claudepilot/abcd1234");
+    assert.equal(wt.branch, "shadok-ai/abcd1234");
     assert.ok(fs.existsSync(wt.path), "checkout dir exists");
     assert.ok(fs.existsSync(path.join(wt.path, "a.txt")), "base files present");
     assert.match(wt.baseSha, /^[0-9a-f]{40}$/);
@@ -65,7 +65,7 @@ test("gitDiff: shows both tracked edits and untracked files vs the base", () => 
     fs.appendFileSync(path.join(wt.path, "a.txt"), "world\n"); // tracked edit
     fs.writeFileSync(path.join(wt.path, "new.txt"), "brand new\n"); // untracked
     const d = gitDiff(wt.path, wt.baseSha);
-    assert.match(d.branch ?? "", /claudepilot\/diff1/);
+    assert.match(d.branch ?? "", /shadok-ai\/diff1/);
     assert.match(d.diff, /a\.txt/);
     assert.match(d.diff, /\+world/);
     assert.match(d.diff, /new\.txt/); // untracked surfaced

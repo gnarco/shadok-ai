@@ -1,9 +1,9 @@
 {
-  "name": "claudepilot",
+  "name": "shadok-ai",
   "version": "0.1.0",
   "main": "dist/session.js",
   "scripts": {
-    "test": "node --import tsx --test test/*.ts .claude/skills/claudepilot-agents/test/",
+    "test": "node --import tsx --test test/*.ts .claude/skills/shadok-ai-agents/test/",
     "build": "tsc",
     "dev": "tsx src/cli.ts",
     "postinstall": "chmod +x node_modules/node-pty/prebuilds/darwin-*/spawn-helper 2>/dev/null || true",
@@ -30,6 +30,6 @@
   },
   "types": "dist/session.d.ts",
   "bin": {
-    "claudepilot": "dist/cli.js"
+    "shadok-ai": "dist/cli.js"
   }
 }

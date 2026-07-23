@@ -1,9 +1,9 @@
 // Example: two conversation turns in the same TUI session.
 //   node examples/two-turns.mjs [cwd]
-import { ClaudePilot } from "../dist/session.js";
+import { PtyPilot } from "../dist/session.js";
 
 const cwd = process.argv[2] ?? process.cwd();
-const pilot = new ClaudePilot({ cwd });
+const pilot = new PtyPilot({ cwd });
 
 pilot.start();
 await pilot.waitForIdle({ stableMs: 1200, timeoutMs: 60_000 });

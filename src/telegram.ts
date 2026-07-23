@@ -272,14 +272,14 @@ export function startTelegram(port: number): void {
       if (bound === null) {
         if (cmd?.cmd === "setup") {
           saveTgGroup(chat.id);
-          await reply(chat.id, threadId, "✅ This group is now claudepilot's board. Use /spawn <name> to create an agent (a forum topic). Enable Topics + make me admin if /spawn fails.");
+          await reply(chat.id, threadId, "✅ This group is now shadok-ai's board. Use /spawn <name> to create an agent (a forum topic). Enable Topics + make me admin if /spawn fails.");
         } else {
-          await reply(chat.id, threadId, "Run /setup here to bind this group as claudepilot's board (one group per instance).");
+          await reply(chat.id, threadId, "Run /setup here to bind this group as shadok-ai's board (one group per instance).");
         }
         return;
       }
       if (bound !== chat.id) {
-        await reply(chat.id, threadId, "⛔ This claudepilot instance is bound to another group.");
+        await reply(chat.id, threadId, "⛔ This shadok-ai instance is bound to another group.");
         return;
       }
     }
@@ -290,7 +290,7 @@ export function startTelegram(port: number): void {
       switch (cmd.cmd) {
         case "start":
         case "help":
-          await reply(chat.id, threadId, "claudepilot — talk to your agent by sending a message.\n/spawn <name> — new agent in a topic (groups)\n/new — reset · /end — stop · /list — bindings");
+          await reply(chat.id, threadId, "shadok-ai — talk to your agent by sending a message.\n/spawn <name> — new agent in a topic (groups)\n/new — reset · /end — stop · /list — bindings");
           return;
         case "setup":
           if (isGroup) await reply(chat.id, threadId, "✅ already this instance's board.");

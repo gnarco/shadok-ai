@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 import { extractResponse, findSessionId } from "./extract.js";
-import { ClaudePilot } from "./session.js";
+import { PtyPilot } from "./session.js";
 
 function usage(): never {
-  console.error(`Usage: claudepilot [options] "<prompt>"
+  console.error(`Usage: shadok-ai [options] "<prompt>"
 
 Sends a prompt to a PTY-driven Claude Code TUI session and prints the
 response once the session becomes idle again.
@@ -51,7 +51,7 @@ const claudeArgs: string[] = [];
 if (continueSession) claudeArgs.push("--continue");
 if (resumeId) claudeArgs.push("--resume", resumeId);
 
-const pilot = new ClaudePilot({ cwd, args: claudeArgs });
+const pilot = new PtyPilot({ cwd, args: claudeArgs });
 
 async function main() {
   console.error("▶ starting claude…");
@@ -80,7 +80,7 @@ async function main() {
   const sessionId = findSessionId(cwd);
   if (sessionId) {
     console.error(`\n▶ session: ${sessionId}`);
-    console.error(`  resume with: claudepilot --resume ${sessionId} "<prompt>"`);
+    console.error(`  resume with: shadok-ai --resume ${sessionId} "<prompt>"`);
   }
 
   if (keep) {

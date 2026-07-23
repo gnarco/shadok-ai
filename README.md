@@ -1,9 +1,9 @@
-# claudepilot
+# shadok-ai
 
 > **Working on this codebase?** Read [`CLAUDE.md`](CLAUDE.md) (map, build/run,
 > invariants) and [`docs/architecture.md`](docs/architecture.md) first — they
 > are the current source of truth. This README covers the original single-session
-> library/CLI; claudepilot is now a multi-session web cockpit (see those docs).
+> library/CLI; shadok-ai is now a multi-session web cockpit (see those docs).
 
 Drives a **Claude Code TUI** session (the interactive `claude` CLI) from Node.js, through a pseudo-terminal.
 
@@ -141,9 +141,9 @@ for everyone).
 ## Library
 
 ```js
-import { ClaudePilot } from "claudepilot";
+import { PtyPilot } from "shadok-ai";
 
-const pilot = new ClaudePilot({ cwd: "/my/project" });
+const pilot = new PtyPilot({ cwd: "/my/project" });
 pilot.start();
 await pilot.waitForIdle();                 // TUI ready
 

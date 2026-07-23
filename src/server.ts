@@ -13,7 +13,7 @@ import {
 } from "./extract.js";
 import { findTransientErrors, newTransientErrors, RETRY_DELAYS_MS } from "./retry.js";
 import { screenShowsWork } from "./detect.js";
-import { ClaudePilot } from "./session.js";
+import { PtyPilot } from "./session.js";
 import { TmuxPilot, tmuxAvailable } from "./tmux.js";
 import { scanUsage, sessionFilePath, tailSession, type TokenUsage } from "./tail.js";
 import { computePace, paceBlock, WINDOW_SEC } from "./pace.js";
@@ -137,20 +137,20 @@ type ClientMessage =
  * session live.
  */
 /** Either transport — same surface; TmuxPilot additionally survives restarts. */
-type Pilot = ClaudePilot | TmuxPilot;
+type Pilot = PtyPilot | TmuxPilot;
 
 /**
  * Selects the transport. tmux is the DEFAULT whenever it is installed: the
  * agent runs in a detached tmux session named after the Claude session id, so
  * it survives the server restarting/crashing and is reattached on the next
- * start of the same id. Set CLAUDEPILOT_TMUX=0 to force the node-pty transport
+ * start of the same id. Set SHADOK_TMUX=0 to force the node-pty transport
  * (which dies with the server). Falls back to node-pty if tmux is absent.
  */
-const USE_TMUX = process.env.CLAUDEPILOT_TMUX !== "0" && tmuxAvailable();
+const USE_TMUX = process.env.SHADOK_TMUX !== "0" && tmuxAvailable();
 function makePilot(id: string, cwd: string, args: string[]): Pilot {
   return USE_TMUX
-    ? new TmuxPilot({ cwd, args, tmuxName: "cp-" + id })
-    : new ClaudePilot({ cwd, args });
+    ? new TmuxPilot({ cwd, args, tmuxName: "sk-" + id })
+    : new PtyPilot({ cwd, args });
 }
 
 interface Live {
@@ -204,7 +204,7 @@ function tokenTotals(s: Live) {
  * you reattach on return and the running turn continues. Set 0 to keep
  * sessions until the process exits or an explicit End.
  */
-const IDLE_RECLAIM_MS = Number(process.env.CLAUDEPILOT_IDLE_MIN ?? 60) * 60_000;
+const IDLE_RECLAIM_MS = Number(process.env.SHADOK_IDLE_MIN ?? 60) * 60_000;
 
 const sessions = new Map<string, Live>();
 
@@ -332,7 +332,7 @@ async function createSession(
   // Resuming a large session shows a "resume from summary?" prompt. Keep the
   // FULL session as-is automatically (the machine may have slept mid-work; the
   // user wants their full context back, not a summary), unless disabled.
-  if (process.env.CLAUDEPILOT_RESUME_SUMMARY !== "1") {
+  if (process.env.SHADOK_RESUME_SUMMARY !== "1") {
     const rd = detectDialog(screen);
     const full = rd?.options.find((o) => /full session/i.test(o.label));
     if (full && /resum|summary/i.test(rd!.question)) {
@@ -804,11 +804,11 @@ wss.on("connection", (ws: WebSocket) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`claudepilot web: http://localhost:${PORT}`);
+  console.log(`shadok-ai web: http://localhost:${PORT}`);
   console.log(
     USE_TMUX
       ? "transport: tmux (agents survive server restarts)"
-      : "transport: node-pty (agents die with the server; install tmux or unset CLAUDEPILOT_TMUX=0 for durability)",
+      : "transport: node-pty (agents die with the server; install tmux or unset SHADOK_TMUX=0 for durability)",
   );
   // Telegram control bridge — connects to this server's own /ws as a client
   // (only if TELEGRAM_BOT_TOKEN is set), so Telegram shares the web sessions.

@@ -9,7 +9,7 @@
  * Marker displayed by Claude Code TUIs while working. The genuine one always
  * sits in the status group, right after a "·" separator or an opening "(",
  * e.g. "(… · esc to interrupt)". Requiring that prefix means prose that merely
- * *mentions* the phrase — Claude explaining claudepilot's own turn detection,
+ * *mentions* the phrase — Claude explaining shadok-ai's own turn detection,
  * quoted or not — never reads as "working".
  */
 const ESC_TO_INTERRUPT = /[·(]\s*esc to interrupt/i;

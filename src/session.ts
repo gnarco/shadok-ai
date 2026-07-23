@@ -4,7 +4,7 @@ import { screenShowsWork, inputHasProbe } from "./detect.js";
 
 const { Terminal } = xterm;
 
-export interface ClaudePilotOptions {
+export interface PilotOptions {
   /** Path to the claude executable (default: "claude" from PATH). */
   claudePath?: string;
   /** Arguments passed to the CLI (e.g. ["--resume", "<id>"]). */
@@ -33,9 +33,9 @@ export interface WaitIdleOptions extends WaitOptions {
  * (@xterm/headless), which lets us read the screen as a human would see it
  * instead of parsing the raw ANSI escape stream.
  */
-export class ClaudePilot {
-  private readonly opts: Required<Pick<ClaudePilotOptions, "cols" | "rows">> &
-    ClaudePilotOptions;
+export class PtyPilot {
+  private readonly opts: Required<Pick<PilotOptions, "cols" | "rows">> &
+    PilotOptions;
   private proc: pty.IPty | null = null;
   private term: InstanceType<typeof Terminal>;
   private dataListeners = new Set<(chunk: string) => void>();
@@ -43,7 +43,7 @@ export class ClaudePilot {
   private lastDataAt = 0;
   private exited = false;
 
-  constructor(options: ClaudePilotOptions = {}) {
+  constructor(options: PilotOptions = {}) {
     this.opts = { cols: 100, rows: 40, ...options };
     this.term = new Terminal({
       cols: this.opts.cols,

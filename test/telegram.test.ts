@@ -31,7 +31,7 @@ test("chunk: a single very long line is hard-cut", () => {
 test("parseCommand: recognizes commands, args, and @botname suffix", () => {
   assert.deepEqual(parseCommand("/new"), { cmd: "new", arg: "" });
   assert.deepEqual(parseCommand("/spawn my agent"), { cmd: "spawn", arg: "my agent" });
-  assert.deepEqual(parseCommand("/list@claudepilot_bot"), { cmd: "list", arg: "" });
+  assert.deepEqual(parseCommand("/list@shadokai_bot"), { cmd: "list", arg: "" });
 });
 
 test("parseCommand: plain text is not a command", () => {

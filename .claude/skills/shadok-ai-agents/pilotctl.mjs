@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// pilotctl — thin client for the claudepilot web server. One-shot commands,
-// JSON on stdout. See .claude/skills/claudepilot-agents/SKILL.md.
+// pilotctl — thin client for the shadok-ai web server. One-shot commands,
+// JSON on stdout. See .claude/skills/shadok-ai-agents/SKILL.md.
 import { execFileSync, spawn as spawnChild } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -11,13 +11,13 @@ import WebSocket from "ws";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
 
-export const port = () => Number(process.env.CLAUDEPILOT_PORT ?? 3789);
+export const port = () => Number(process.env.SHADOK_PORT ?? 3789);
 export const httpBase = () => `http://localhost:${port()}`;
 export const wsUrl = () => `ws://localhost:${port()}/ws`;
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 export function stateDir() {
-  return process.env.CLAUDEPILOT_STATE_DIR ?? path.join(os.homedir(), ".claudepilot", "pilotctl");
+  return process.env.SHADOK_STATE_DIR ?? path.join(os.homedir(), ".shadok-ai", "pilotctl");
 }
 
 export function readState(id) {
@@ -161,8 +161,8 @@ async function serverUp() {
 
 export async function ensureServer() {
   if (await serverUp()) return;
-  if (process.env.CLAUDEPILOT_NO_AUTOSTART)
-    throw new Error(`claudepilot server unreachable on :${port()}`);
+  if (process.env.SHADOK_NO_AUTOSTART)
+    throw new Error(`shadok-ai server unreachable on :${port()}`);
   const dist = path.join(REPO_ROOT, "dist", "server.js");
   if (!fs.existsSync(dist))
     execFileSync("npm", ["run", "build"], { cwd: REPO_ROOT, stdio: "ignore" });
@@ -181,13 +181,13 @@ export async function ensureServer() {
     if (await serverUp()) return;
     await sleep(300);
   }
-  throw new Error(`claudepilot server did not come up on :${port()} (log: ${logPath})`);
+  throw new Error(`shadok-ai server did not come up on :${port()} (log: ${logPath})`);
 }
 
 // The server kills the claude process when its last WS client detaches, so a
 // detached "hold" process keeps one attachment open per piloted agent.
 export async function ensureHolder(id, cwd) {
-  if (process.env.CLAUDEPILOT_NO_HOLDER) return;
+  if (process.env.SHADOK_NO_HOLDER) return;
   const st = readState(id);
   if (st?.holderPid && pidAlive(st.holderPid)) return;
   const self = fileURLToPath(import.meta.url);

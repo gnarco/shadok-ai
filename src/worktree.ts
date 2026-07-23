@@ -36,13 +36,13 @@ export function isGitRepo(cwd: string): boolean {
 /**
  * Creates an isolated git worktree off the repo's current HEAD, on a fresh
  * branch, so an agent's edits stay contained until the user merges them.
- * The checkout lives under ~/.claudepilot/worktrees to avoid polluting the repo.
+ * The checkout lives under ~/.shadok-ai/worktrees to avoid polluting the repo.
  */
 export function createWorktree(repo: string, tag: string): Worktree {
   const baseSha = git(repo, ["rev-parse", "HEAD"]);
   const repoName = path.basename(path.resolve(repo)).replace(/[^a-zA-Z0-9._-]/g, "-");
-  const branch = `claudepilot/${tag}`;
-  const dir = path.join(os.homedir(), ".claudepilot", "worktrees", `${repoName}-${tag}`);
+  const branch = `shadok-ai/${tag}`;
+  const dir = path.join(os.homedir(), ".shadok-ai", "worktrees", `${repoName}-${tag}`);
   fs.mkdirSync(path.dirname(dir), { recursive: true });
   git(repo, ["worktree", "add", "-b", branch, dir, baseSha]);
   return { path: dir, branch, baseSha, repo };
@@ -95,7 +95,7 @@ export interface PastSession {
 }
 
 /**
- * Lists every past claudepilot worktree session of a repo — recoverable from
+ * Lists every past shadok-ai worktree session of a repo — recoverable from
  * their branch even if the checkout was reclaimed — newest first, so
  * unfinished work can be reopened and continued.
  */
@@ -108,7 +108,7 @@ export function listPastSessions(repo: string): PastSession[] {
   }
   let branches: string[];
   try {
-    branches = git(repo, ["branch", "--list", "claudepilot/*", "--format=%(refname:short)"])
+    branches = git(repo, ["branch", "--list", "shadok-ai/*", "--format=%(refname:short)"])
       .split("\n")
       .filter(Boolean);
   } catch {
@@ -117,8 +117,8 @@ export function listPastSessions(repo: string): PastSession[] {
   const repoName = path.basename(path.resolve(repo)).replace(/[^a-zA-Z0-9._-]/g, "-");
   const out: PastSession[] = [];
   for (const branch of branches) {
-    const tag = branch.replace(/^claudepilot\//, "");
-    const cwd = path.join(os.homedir(), ".claudepilot", "worktrees", `${repoName}-${tag}`);
+    const tag = branch.replace(/^shadok-ai\//, "");
+    const cwd = path.join(os.homedir(), ".shadok-ai", "worktrees", `${repoName}-${tag}`);
     // The transcript lives in the worktree's project dir even if the checkout
     // was removed — read the full session id and preview from there.
     const sess = listSessions(cwd)[0] ?? null;
