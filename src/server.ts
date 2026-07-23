@@ -26,7 +26,7 @@ import {
   removeChannel,
   mergeClientChannels,
 } from "./channels.js";
-import { startTelegram, renameTelegramTopic } from "./telegram.js";
+import { startTelegram, renameTelegramTopic, closeTelegramTopic } from "./telegram.js";
 import { migrateTgBindings } from "./channels.js";
 import {
   createWorktree,
@@ -821,9 +821,15 @@ wss.on("connection", (ws: WebSocket) => {
         }
 
         case "stop": {
-          // Explicit stop: ends the session for ALL clients.
+          // Explicit stop: ends the session for ALL clients, drops it from the
+          // one registry, and archives its Telegram topic if it had one.
           if (!session) return;
           const s = session;
+          const ch = loadChannels().find((c) => c.sessionId === s.id);
+          // Update the registry BEFORE notifying, so a client that reacts to
+          // "stopped" (or the sync poll) sees it already gone.
+          removeChannel(s.id);
+          if (ch?.telegram?.threadId) closeTelegramTopic(ch.telegram.chatId, ch.telegram.threadId);
           broadcast(s, { type: "stopped" });
           await s.pilot.stop();
           destroySession(s);

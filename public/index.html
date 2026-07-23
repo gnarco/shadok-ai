@@ -1328,14 +1328,32 @@
   // Telegram/live channel survives a client PUT, so it stays in the registry).
   const dismissedChannels = new Set();
 
+  // Removes a tab locally (no PUT/dismiss) — used when the session ended
+  // elsewhere (another browser, Telegram /end, a closed topic).
+  function removeTabLocal(tab) {
+    if (tab.ws && tab.ws.readyState === WebSocket.OPEN) tab.ws.close();
+    dropDraft(tab);
+    tab.btnEl.remove();
+    tab.transcriptEl.remove();
+    tabs = tabs.filter((t) => t !== tab);
+    refreshTitle();
+    if (active === tab) {
+      if (tabs.length) activate(tabs[tabs.length - 1]);
+      else createTab();
+    }
+  }
+
   // Reconcile the open tabs with the server registry every few seconds — the ONE
   // source of truth. A new session (e.g. a Telegram /spawn) shows up as a tab
-  // live; a renamed channel (from Telegram or another browser) renames its tab.
+  // live; a renamed channel renames its tab; a channel that left the registry
+  // (ended elsewhere) closes its tab.
+  let lastChannelIds = new Set();
   async function syncChannels() {
     if (restoring) return;
     let chans;
     try { chans = await (await fetch("/channels")).json(); } catch { return; }
     if (!Array.isArray(chans)) return;
+    const current = new Set(chans.map((c) => c.sessionId).filter(Boolean));
     const tabById = new Map(tabs.filter((t) => t.sessionId).map((t) => [t.sessionId, t]));
     for (const c of chans) {
       if (!c.sessionId) continue;
@@ -1362,6 +1380,13 @@
         });
       }
     }
+    // A channel that was in the registry and is now gone was ended elsewhere.
+    for (const t of [...tabs]) {
+      if (t.sessionId && lastChannelIds.has(t.sessionId) && !current.has(t.sessionId)) {
+        removeTabLocal(t);
+      }
+    }
+    lastChannelIds = current;
   }
   setInterval(syncChannels, 4000);
 
@@ -2044,10 +2069,10 @@
         setTabState(t, "dead", "session ended");
         break;
       case "stopped":
-        addTurn(t, "system", "", "Session closed cleanly.");
+        // Explicit end: the session is gone from the registry — drop the tab.
         stopTurnTimer(t);
-        setTabMood(t, null);
-        setTabState(t, "dead", "session ended");
+        if (t.sessionId) dismissedChannels.add(t.sessionId);
+        removeTabLocal(t);
         break;
       case "auto-retry":
         // The server will resend "continue" by itself; nothing to do here.
