@@ -63,10 +63,12 @@ UI: **http://localhost:3789**. Logs: `/tmp/cp.log`. Health: `curl -s -o /dev/nul
   everything). **Control** (submit, detect turn end, dialogs, engine-room
   screen) flows through the pilot's rendered screen. Don't scrape the screen
   for response text — that's what caused truncation; use the tail.
-- **Sessions outlive clients**: closing a tab detaches; the process keeps
-  running and is reclaimed only after `SHADOK_IDLE_MIN` min (default 60)
-  with no client, or on explicit `stop`. With tmux, it also outlives the
-  server.
+- **Sessions outlive clients** on *disconnect* (reload, another device, a
+  dropped WS): the process keeps running and is reclaimed only after
+  `SHADOK_IDLE_MIN` min (default 60) with no client. With tmux, it also
+  outlives the server. **Explicit close ends it everywhere**: the tab ✕, "End
+  session", Telegram `/end`, and closing a topic all send `stop`, which drops
+  the session from the registry and archives its Telegram topic.
 
 ## WebSocket protocol (`/ws`)
 
