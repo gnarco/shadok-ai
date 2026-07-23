@@ -65,3 +65,12 @@ export function loadTgBindings(): any[] {
 export function saveTgBindings(list: any[]): void {
   writeJson("telegram", list);
 }
+
+/** The single group this instance is bound to (one board per instance), or null. */
+export function loadTgGroup(): number | null {
+  const v = readJson("telegram-group")[0];
+  return typeof v === "number" ? v : null;
+}
+export function saveTgGroup(groupId: number | null): void {
+  writeJson("telegram-group", groupId == null ? [] : [groupId]);
+}

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { bindKey, chunk, parseCommand } from "../src/telegram.js";
+import { bindKey, chunk, parseCommand, dialogKeyboard, parseCallback } from "../src/telegram.js";
 
 test("bindKey: DM, group, and forum topic map to distinct keys", () => {
   assert.equal(bindKey({ id: 42, type: "private" }), "private:42");
@@ -37,4 +37,42 @@ test("parseCommand: recognizes commands, args, and @botname suffix", () => {
 test("parseCommand: plain text is not a command", () => {
   assert.equal(parseCommand("hello there"), null);
   assert.equal(parseCommand("what is /usr/bin?"), null);
+});
+
+test("dialogKeyboard: single-select → one 'choose' button per option, no submit", () => {
+  const kb = dialogKeyboard({
+    question: "Q?",
+    multi: false,
+    options: [
+      { n: 1, label: "Alpha" },
+      { n: 2, label: "Beta" },
+    ],
+  });
+  assert.equal(kb.inline_keyboard.length, 2);
+  assert.deepEqual(kb.inline_keyboard[0][0], { text: "1. Alpha", callback_data: "d:1" });
+  assert.deepEqual(kb.inline_keyboard[1][0], { text: "2. Beta", callback_data: "d:2" });
+});
+
+test("dialogKeyboard: multi-select → toggle buttons with ☑/☐ + a Submit row", () => {
+  const kb = dialogKeyboard({
+    question: "Q?",
+    multi: true,
+    options: [
+      { n: 1, label: "A", checked: true },
+      { n: 2, label: "B", checked: false },
+    ],
+  });
+  assert.match(kb.inline_keyboard[0][0].text, /^☑ 1\. A/);
+  assert.equal(kb.inline_keyboard[0][0].callback_data, "t:1");
+  assert.match(kb.inline_keyboard[1][0].text, /^☐ 2\. B/);
+  const last = kb.inline_keyboard[kb.inline_keyboard.length - 1][0];
+  assert.deepEqual(last, { text: "✅ Submit", callback_data: "s" });
+});
+
+test("parseCallback: choose / toggle / confirm, and garbage → null", () => {
+  assert.deepEqual(parseCallback("d:3"), { kind: "choose", n: 3 });
+  assert.deepEqual(parseCallback("t:2"), { kind: "toggle", n: 2 });
+  assert.deepEqual(parseCallback("s"), { kind: "confirm" });
+  assert.equal(parseCallback("x:1"), null);
+  assert.equal(parseCallback(""), null);
 });

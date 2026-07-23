@@ -1,5 +1,5 @@
 import WebSocket from "ws";
-import { loadTgBindings, saveTgBindings } from "./channels.js";
+import { loadTgBindings, saveTgBindings, loadTgGroup, saveTgGroup } from "./channels.js";
 
 /**
  * Telegram control bridge. Runs inside the server process (only when
@@ -41,6 +41,39 @@ export function parseCommand(text: string): { cmd: string; arg: string } | null 
   return m ? { cmd: m[1].toLowerCase(), arg: m[2].trim() } : null;
 }
 
+interface DialogOption {
+  n: number;
+  label: string;
+  hint?: string;
+  checked?: boolean;
+}
+interface Dialog {
+  question: string;
+  options: DialogOption[];
+  multi: boolean;
+}
+
+/** Inline keyboard for a TUI dialog. Single-select → one button per option
+ *  (choose); multi-select → toggle buttons (with ☑/☐) + a Submit row. */
+export function dialogKeyboard(d: Dialog): { inline_keyboard: { text: string; callback_data: string }[][] } {
+  const rows = d.options.map((o) => [
+    {
+      text: (d.multi ? (o.checked ? "☑ " : "☐ ") : "") + `${o.n}. ${o.label}`.slice(0, 60),
+      callback_data: (d.multi ? "t:" : "d:") + o.n,
+    },
+  ]);
+  if (d.multi) rows.push([{ text: "✅ Submit", callback_data: "s" }]);
+  return { inline_keyboard: rows };
+}
+
+/** Parse a dialog callback_data → an action for the WS. */
+export function parseCallback(data: string): { kind: "choose" | "toggle" | "confirm"; n?: number } | null {
+  if (data === "s") return { kind: "confirm" };
+  const m = data.match(/^([dt]):(\d+)$/);
+  if (!m) return null;
+  return { kind: m[1] === "d" ? "choose" : "toggle", n: Number(m[2]) };
+}
+
 // ── Runtime ──────────────────────────────────────────────────────────────
 
 interface Bridge {
@@ -51,6 +84,8 @@ interface Bridge {
   sessionId: string | null;
   ready: boolean;
   pending: string[]; // prompts queued until the WS is ready
+  dialogMsgId?: number; // Telegram message showing the current dialog keyboard
+  worktree?: boolean; // spawn the session in an isolated worktree
 }
 
 export function startTelegram(port: number): void {
@@ -96,15 +131,31 @@ export function startTelegram(port: number): void {
   };
 
   /** Open (or resume) a session for a chat/topic and wire its events to Telegram. */
-  const openBridge = (key: string, chatId: number, threadId: number | undefined, resumeId?: string): Bridge => {
+  const openBridge = (
+    key: string,
+    chatId: number,
+    threadId: number | undefined,
+    opts: { resumeId?: string; worktree?: boolean } = {},
+  ): Bridge => {
     const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
-    const b: Bridge = { key, chatId, threadId, ws, sessionId: resumeId ?? null, ready: false, pending: [] };
+    const b: Bridge = {
+      key,
+      chatId,
+      threadId,
+      ws,
+      sessionId: opts.resumeId ?? null,
+      ready: false,
+      pending: [],
+      worktree: opts.worktree,
+    };
     bridges.set(key, b);
 
     ws.on("open", () => {
       ws.send(
         JSON.stringify(
-          resumeId ? { type: "start", resume: resumeId, cwd: process.cwd() } : { type: "start", cwd: process.cwd() },
+          opts.resumeId
+            ? { type: "start", resume: opts.resumeId, cwd: process.cwd() }
+            : { type: "start", cwd: process.cwd(), worktree: !!opts.worktree },
         ),
       );
     });
@@ -132,13 +183,38 @@ export function startTelegram(port: number): void {
         case "stream-text":
           if (m.text?.trim()) send(b, m.text);
           break;
+        case "stream-tool":
+          send(b, "→ " + m.name + (m.summary ? "  " + m.summary : ""));
+          break;
+        case "dialog":
+          // A TUI question → inline keyboard. On multi-select toggles the
+          // server re-sends the dialog; edit the existing keyboard in place.
+          if (b.dialogMsgId) {
+            tg("editMessageReplyMarkup", {
+              chat_id: b.chatId,
+              message_id: b.dialogMsgId,
+              reply_markup: dialogKeyboard(m),
+            });
+          } else {
+            tg("sendMessage", {
+              chat_id: b.chatId,
+              ...(b.threadId ? { message_thread_id: b.threadId } : {}),
+              text: m.question || "Choisis :",
+              reply_markup: dialogKeyboard(m),
+            }).then((r) => {
+              if (r?.ok) b.dialogMsgId = r.result.message_id;
+            });
+          }
+          break;
+        case "turn-done":
+          b.dialogMsgId = undefined; // any dialog is resolved once the turn ends
+          break;
         case "error":
           send(b, "⚠️ " + m.message);
           break;
         case "exited":
           send(b, "— session ended —");
           break;
-        // stream-tool / stream-result / dialog / turn-done handled in increment 2/3
       }
     });
     ws.on("close", () => {
@@ -152,7 +228,7 @@ export function startTelegram(port: number): void {
     const existing = bridges.get(key);
     if (existing && existing.ws.readyState <= WebSocket.OPEN) return existing;
     const saved = loadTgBindings().find((x: any) => x.key === key);
-    return openBridge(key, chatId, threadId, saved?.sessionId);
+    return openBridge(key, chatId, threadId, { resumeId: saved?.sessionId });
   };
 
   const promptTo = (b: Bridge, text: string) => {
@@ -160,57 +236,114 @@ export function startTelegram(port: number): void {
     else b.pending.push(text);
   };
 
-  const handleUpdate = async (u: any) => {
-    const msg = u.message;
-    if (!msg || typeof msg.text !== "string") return;
+  const reply = (chatId: number, threadId: number | undefined, text: string, extra: object = {}) =>
+    tg("sendMessage", {
+      chat_id: chatId,
+      ...(threadId ? { message_thread_id: threadId } : {}),
+      text,
+      disable_web_page_preview: true,
+      ...extra,
+    });
+
+  const endBinding = (key: string) => {
+    const b = bridges.get(key);
+    if (b) {
+      b.ws.send(JSON.stringify({ type: "stop" }));
+      b.ws.close();
+      bridges.delete(key);
+    }
+    saveTgBindings(loadTgBindings().filter((x: any) => x.key !== key));
+  };
+
+  const handleMessage = async (msg: any) => {
+    if (typeof msg.text !== "string") return;
     const chat = msg.chat;
     if (allowed.length && !allowed.includes(String(chat.id))) {
-      await tg("sendMessage", { chat_id: chat.id, text: "⛔ this bot is restricted." });
+      await reply(chat.id, msg.message_thread_id, "⛔ this bot is restricted.");
       return;
     }
     const threadId = msg.message_thread_id as number | undefined;
-    const key = bindKey(chat, threadId);
+    const isGroup = chat.type === "group" || chat.type === "supergroup";
     const cmd = parseCommand(msg.text);
+
+    // One board per instance: a group must be the bound group.
+    if (isGroup) {
+      const bound = loadTgGroup();
+      if (bound === null) {
+        if (cmd?.cmd === "setup") {
+          saveTgGroup(chat.id);
+          await reply(chat.id, threadId, "✅ This group is now claudepilot's board. Use /spawn <name> to create an agent (a forum topic). Enable Topics + make me admin if /spawn fails.");
+        } else {
+          await reply(chat.id, threadId, "Run /setup here to bind this group as claudepilot's board (one group per instance).");
+        }
+        return;
+      }
+      if (bound !== chat.id) {
+        await reply(chat.id, threadId, "⛔ This claudepilot instance is bound to another group.");
+        return;
+      }
+    }
+
+    const key = bindKey(chat, threadId);
 
     if (cmd) {
       switch (cmd.cmd) {
         case "start":
-          await tg("sendMessage", {
-            chat_id: chat.id,
-            ...(threadId ? { message_thread_id: threadId } : {}),
-            text: "claudepilot — send a message to talk to your agent. /new to reset, /end to stop, /list to see bindings.",
-          });
+        case "help":
+          await reply(chat.id, threadId, "claudepilot — talk to your agent by sending a message.\n/spawn <name> — new agent in a topic (groups)\n/new — reset · /end — stop · /list — bindings");
           return;
-        case "new":
-        case "end": {
-          const b = bridges.get(key);
-          if (b) {
-            b.ws.send(JSON.stringify({ type: "stop" }));
-            b.ws.close();
-            bridges.delete(key);
+        case "setup":
+          if (isGroup) await reply(chat.id, threadId, "✅ already this instance's board.");
+          return;
+        case "spawn": {
+          if (!isGroup) {
+            await reply(chat.id, threadId, "/spawn works in the board group. In a DM just send a message.");
+            return;
           }
-          saveTgBindings(loadTgBindings().filter((x: any) => x.key !== key));
-          await tg("sendMessage", {
-            chat_id: chat.id,
-            ...(threadId ? { message_thread_id: threadId } : {}),
-            text: cmd.cmd === "new" ? "🔄 fresh session — send a message." : "🛑 session ended.",
-          });
+          const name = cmd.arg || "agent";
+          const t = await tg("createForumTopic", { chat_id: chat.id, name: name.slice(0, 128) });
+          if (!t?.ok) {
+            await reply(chat.id, threadId, "⚠️ Couldn't create a topic — enable Topics in the group and make me an admin with 'Manage topics'.");
+            return;
+          }
+          const newThread = t.result.message_thread_id;
+          // A group agent is isolated in its own worktree (a board of agents).
+          openBridge(bindKey(chat, newThread), chat.id, newThread, { worktree: true });
+          await reply(chat.id, newThread, `🤖 Agent « ${name} » ready (isolated worktree). Send it a task.`);
           return;
         }
+        case "new":
+        case "end":
+          endBinding(key);
+          await reply(chat.id, threadId, cmd.cmd === "new" ? "🔄 fresh session — send a message." : "🛑 session ended.");
+          return;
         case "list": {
           const lines = loadTgBindings().map((x: any) => `• ${x.key} → ${String(x.sessionId).slice(0, 8)}`);
-          await tg("sendMessage", {
-            chat_id: chat.id,
-            ...(threadId ? { message_thread_id: threadId } : {}),
-            text: lines.length ? lines.join("\n") : "no sessions bound yet.",
-          });
+          await reply(chat.id, threadId, lines.length ? lines.join("\n") : "no sessions bound yet.");
           return;
         }
-        // spawn / cwd / worktree: increment 2
       }
     }
 
     promptTo(bridgeFor(key, chat.id, threadId), msg.text);
+  };
+
+  const handleCallback = async (cq: any) => {
+    const action = parseCallback(cq.data ?? "");
+    const msg = cq.message;
+    if (!action || !msg) return;
+    const key = bindKey(msg.chat, msg.message_thread_id);
+    const b = bridges.get(key);
+    if (b?.ws.readyState === WebSocket.OPEN) {
+      if (action.kind === "confirm") b.ws.send(JSON.stringify({ type: "confirm" }));
+      else b.ws.send(JSON.stringify({ type: action.kind, n: action.n }));
+    }
+    await tg("answerCallbackQuery", { callback_query_id: cq.id });
+  };
+
+  const handleUpdate = async (u: any) => {
+    if (u.callback_query) return handleCallback(u.callback_query);
+    if (u.message) return handleMessage(u.message);
   };
 
   // Long-poll loop — no webhook / public URL needed.
