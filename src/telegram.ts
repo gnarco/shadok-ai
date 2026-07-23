@@ -617,6 +617,42 @@ export function startTelegram(port: number): void {
     setTimeout(poll, res ? 0 : 3000); // back off on network error
   };
 
+  // Full mirror: every LIVE web-created channel (one with no Telegram binding)
+  // gets its own topic in the board group, bound to the same session — so the
+  // web and Telegram show one list both ways. Only live sessions are mirrored
+  // (a stale channel from a past run isn't), and a session already handled by a
+  // bridge (a /spawn) is skipped so we never double-create.
+  const mirroring = new Set<string>();
+  const reconcileWebChannels = async () => {
+    const group = loadTgGroup();
+    if (group === null) return;
+    let live: any[];
+    try {
+      live = await (await fetch(`http://127.0.0.1:${port}/live`)).json();
+    } catch {
+      return;
+    }
+    const liveIds = new Set(Array.isArray(live) ? live.map((s) => s.id) : []);
+    const bridged = new Set([...bridges.values()].map((b) => b.sessionId).filter(Boolean));
+    for (const c of loadChannels()) {
+      if (c.telegram || !liveIds.has(c.sessionId) || bridged.has(c.sessionId) || mirroring.has(c.sessionId))
+        continue;
+      mirroring.add(c.sessionId);
+      const name = (c.name || c.sessionId.slice(0, 8)).slice(0, 128);
+      const t = await tg("createForumTopic", { chat_id: group, name });
+      if (t?.ok) {
+        const threadId = t.result.message_thread_id;
+        // Bind the new topic to the existing web session (shared, not a respawn).
+        openBridge(bindKey({ id: group, type: "supergroup" }, threadId), group, threadId, {
+          resumeId: c.sessionId,
+          name,
+        });
+      } else {
+        mirroring.delete(c.sessionId); // couldn't create (perms/Topics off) — retry later
+      }
+    }
+  };
+
   // Connect, retrying transient failures with backoff. A single network hiccup
   // on getMe used to leave Telegram dead for the whole run; only a real 401
   // (bad token) stops us now.
@@ -626,6 +662,7 @@ export function startTelegram(port: number): void {
       console.log(`telegram: bot @${me.result.username} connected (long-polling)`);
       poll();
       announceUpdateResult();
+      setInterval(() => reconcileWebChannels().catch(() => {}), 5000);
       return;
     }
     if (me && me.error_code === 401) {
