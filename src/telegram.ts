@@ -472,15 +472,26 @@ export function startTelegram(port: number): void {
     setTimeout(poll, res ? 0 : 3000); // back off on network error
   };
 
-  tg("getMe", {}).then((me) => {
+  // Connect, retrying transient failures with backoff. A single network hiccup
+  // on getMe used to leave Telegram dead for the whole run; only a real 401
+  // (bad token) stops us now.
+  const connect = async (attempt = 0): Promise<void> => {
+    const me = await tg("getMe", {});
     if (me?.ok) {
       console.log(`telegram: bot @${me.result.username} connected (long-polling)`);
       poll();
       announceUpdateResult();
-    } else {
-      console.log("telegram: getMe failed — check TELEGRAM_BOT_TOKEN");
+      return;
     }
-  });
+    if (me && me.error_code === 401) {
+      console.log("telegram: unauthorized — check TELEGRAM_BOT_TOKEN");
+      return;
+    }
+    const delay = Math.min(30_000, 2_000 * 2 ** attempt);
+    console.log(`telegram: getMe failed (transient), retrying in ${delay / 1000}s`);
+    setTimeout(() => connect(attempt + 1), delay);
+  };
+  connect();
 
   /** After a supervisor-driven /update, tell the board group how it went. */
   function announceUpdateResult(): void {
