@@ -43,6 +43,26 @@ export function parseCommand(text: string): { cmd: string; arg: string } | null 
   return m ? { cmd: m[1].toLowerCase(), arg: m[2].trim() } : null;
 }
 
+/** Telegram's "typing…" indicator lives ~5 s per sendChatAction and dies on
+ *  every sendMessage — a single beat can't cover a turn that runs for minutes.
+ *  This keeps it alive: an immediate beat, then one every `intervalMs` until
+ *  stop(). start() while beating is a no-op; stop() is idempotent. */
+export function makeTyping(beat: () => void, intervalMs = 4000): { start: () => void; stop: () => void } {
+  let timer: NodeJS.Timeout | null = null;
+  return {
+    start() {
+      if (timer) return;
+      beat();
+      timer = setInterval(beat, intervalMs);
+      timer.unref?.(); // never keep the process alive for an indicator
+    },
+    stop() {
+      if (timer) clearInterval(timer);
+      timer = null;
+    },
+  };
+}
+
 interface DialogOption {
   n: number;
   label: string;
@@ -89,6 +109,7 @@ interface Bridge {
   pendingActions: object[]; // dialog actions (choose/toggle/confirm) queued until ready
   dialogMsgId?: number; // Telegram message showing the current dialog keyboard
   worktree?: boolean; // spawn the session in an isolated worktree
+  typing: { start: () => void; stop: () => void }; // "typing…" heartbeat for the running turn
 }
 
 export function startTelegram(port: number): void {
@@ -151,6 +172,13 @@ export function startTelegram(port: number): void {
       pending: [],
       pendingActions: [],
       worktree: opts.worktree,
+      typing: makeTyping(() =>
+        tg("sendChatAction", {
+          chat_id: chatId,
+          ...(threadId ? { message_thread_id: threadId } : {}),
+          action: "typing",
+        }),
+      ),
     };
     bridges.set(key, b);
 
@@ -179,11 +207,9 @@ export function startTelegram(port: number): void {
           for (const a of b.pendingActions.splice(0)) ws.send(JSON.stringify(a));
           break;
         case "working":
-          tg("sendChatAction", {
-            chat_id: b.chatId,
-            ...(b.threadId ? { message_thread_id: b.threadId } : {}),
-            action: "typing",
-          });
+          // Heartbeat, not a one-shot: Telegram's indicator dies after ~5 s
+          // (and on every message we send) while a turn runs for minutes.
+          b.typing.start();
           break;
         case "stream-text":
           if (m.text?.trim()) send(b, m.text);
@@ -192,6 +218,9 @@ export function startTelegram(port: number): void {
           send(b, "→ " + m.name + (m.summary ? "  " + m.summary : ""));
           break;
         case "dialog":
+          // The turn is suspended on a question — Claude isn't "typing",
+          // it's waiting for the user. Stop the heartbeat.
+          b.typing.stop();
           // A TUI question → inline keyboard. On multi-select toggles the
           // server re-sends the dialog; edit the existing keyboard in place.
           if (b.dialogMsgId) {
@@ -212,17 +241,29 @@ export function startTelegram(port: number): void {
           }
           break;
         case "turn-done":
+          b.typing.stop();
           b.dialogMsgId = undefined; // any dialog is resolved once the turn ends
           break;
+        case "pace-blocked":
+          // The prompt was refused by the pace guard (there is no "force"
+          // button here) — say so instead of staying silent, and drop the
+          // optimistic typing started at message receipt.
+          b.typing.stop();
+          send(b, "⏸️ pace guard: " + (m.reason ?? "over the ideal pace") + "\nYour message was not sent — retry later.");
+          break;
         case "error":
+          // No typing.stop() here: fail() errors ("a response is already in
+          // progress") don't end the running turn — turn-done/exited will.
           send(b, "⚠️ " + m.message);
           break;
         case "exited":
+          b.typing.stop();
           send(b, "— session ended —");
           break;
       }
     });
     ws.on("close", () => {
+      b.typing.stop();
       if (bridges.get(key) === b) bridges.delete(key);
     });
     ws.on("error", () => {});
@@ -343,7 +384,13 @@ export function startTelegram(port: number): void {
       }
     }
 
-    promptTo(bridgeFor(key, chat.id, threadId), msg.text);
+    // Optimistic typing: start the heartbeat now, before the server confirms
+    // anything — spawning/resuming a session can take tens of seconds and the
+    // first "working" only arrives after it. Every terminal outcome stops it
+    // (turn-done, dialog, pace-blocked, exited, ws close).
+    const b = bridgeFor(key, chat.id, threadId);
+    b.typing.start();
+    promptTo(b, msg.text);
   };
 
   const handleCallback = async (cq: any) => {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { bindKey, chunk, parseCommand, dialogKeyboard, parseCallback } from "../src/telegram.js";
+import { bindKey, chunk, parseCommand, dialogKeyboard, parseCallback, makeTyping } from "../src/telegram.js";
 
 test("bindKey: DM, group, and forum topic map to distinct keys", () => {
   assert.equal(bindKey({ id: 42, type: "private" }), "private:42");
@@ -67,6 +67,45 @@ test("dialogKeyboard: multi-select → toggle buttons with ☑/☐ + a Submit ro
   assert.match(kb.inline_keyboard[1][0].text, /^☐ 2\. B/);
   const last = kb.inline_keyboard[kb.inline_keyboard.length - 1][0];
   assert.deepEqual(last, { text: "✅ Submit", callback_data: "s" });
+});
+
+test("makeTyping: start beats immediately, then on every interval", (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  let beats = 0;
+  const typing = makeTyping(() => beats++, 4000);
+  typing.start();
+  assert.equal(beats, 1); // immediate first beat — no 4s wait for the indicator
+  t.mock.timers.tick(4000);
+  assert.equal(beats, 2);
+  t.mock.timers.tick(8000);
+  assert.equal(beats, 4);
+  typing.stop();
+});
+
+test("makeTyping: start while already beating does not double the pulse", (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  let beats = 0;
+  const typing = makeTyping(() => beats++, 4000);
+  typing.start();
+  typing.start(); // e.g. two "working" events in a row
+  assert.equal(beats, 1);
+  t.mock.timers.tick(4000);
+  assert.equal(beats, 2);
+  typing.stop();
+});
+
+test("makeTyping: stop halts the pulse and is idempotent; restart works", (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  let beats = 0;
+  const typing = makeTyping(() => beats++, 4000);
+  typing.start();
+  typing.stop();
+  typing.stop(); // turn-done then exited must not throw
+  t.mock.timers.tick(20000);
+  assert.equal(beats, 1); // only the immediate beat, nothing after stop
+  typing.start(); // next turn
+  assert.equal(beats, 2);
+  typing.stop();
 });
 
 test("parseCallback: choose / toggle / confirm, and garbage → null", () => {
