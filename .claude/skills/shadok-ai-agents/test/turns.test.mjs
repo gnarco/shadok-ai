@@ -5,15 +5,15 @@ import os from "node:os";
 import path from "node:path";
 import { startMockServer } from "./mock-server.mjs";
 
-process.env.CLAUDEPILOT_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "pilotctl-test-"));
-process.env.CLAUDEPILOT_NO_HOLDER = "1";
-process.env.CLAUDEPILOT_NO_AUTOSTART = "1";
+process.env.SHADOK_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "pilotctl-test-"));
+process.env.SHADOK_NO_HOLDER = "1";
+process.env.SHADOK_NO_AUTOSTART = "1";
 const { run, writeState } = await import("../pilotctl.mjs");
 
 const READY = { type: "ready", sessionId: "abc", cwd: "/tmp/x" };
 
 function useMock(mock) {
-  process.env.CLAUDEPILOT_PORT = String(mock.port);
+  process.env.SHADOK_PORT = String(mock.port);
   writeState("abc", { sessionId: "abc", cwd: "/tmp/x", holderPid: null });
 }
 

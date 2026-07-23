@@ -111,7 +111,7 @@ export async function getUsage(): Promise<Usage | null> {
           Authorization: `Bearer ${token}`,
           Accept: "application/json",
           "anthropic-beta": "oauth-2025-04-20",
-          "User-Agent": "claudepilot",
+          "User-Agent": "shadok-ai",
         },
       });
       if (!res.ok) return cache; // keep last good snapshot on transient errors

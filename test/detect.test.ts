@@ -41,7 +41,7 @@ test("genuine unquoted 'esc to interrupt' status is working", () => {
 });
 
 test("a QUOTED 'esc to interrupt' in prose is NOT working (the self-reference bug)", () => {
-  // Claude explaining claudepilot's own detection must not trip it.
+  // Claude explaining shadok-ai's own detection must not trip it.
   assert.equal(
     screenShowsWork('la fin de tour est détectée (plus de "esc to interrupt" + écran stable).'),
     false,

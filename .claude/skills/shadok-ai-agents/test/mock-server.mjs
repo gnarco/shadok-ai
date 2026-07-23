@@ -1,7 +1,7 @@
 import http from "node:http";
 import { WebSocketServer } from "ws";
 
-// Minimal stand-in for the claudepilot server: replays scripted replies per
+// Minimal stand-in for the shadok-ai server: replays scripted replies per
 // incoming message type, so pilotctl's client logic is exercised without a
 // real claude process. `script[type]` is an array of messages to send back.
 export function startMockServer(script = {}) {

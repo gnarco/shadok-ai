@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-process.env.CLAUDEPILOT_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "pilotctl-test-"));
+process.env.SHADOK_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "pilotctl-test-"));
 const { parseArgs, readState, writeState, deleteState } = await import("../pilotctl.mjs");
 
 test("parseArgs sépare commande, positionnels et flags", () => {

@@ -1,11 +1,11 @@
 import { execFileSync } from "node:child_process";
 import { screenShowsWork, inputHasProbe } from "./detect.js";
-import type { ClaudePilotOptions, WaitIdleOptions, WaitOptions } from "./session.js";
+import type { PilotOptions, WaitIdleOptions, WaitOptions } from "./session.js";
 
 /**
- * Same interface as {@link ClaudePilot}, but runs `claude` inside a detached
+ * Same interface as {@link PtyPilot}, but runs `claude` inside a detached
  * **tmux** session instead of a node-pty child. tmux (its own daemon) owns the
- * terminal, so the agent survives the claudepilot server restarting or
+ * terminal, so the agent survives the shadok-ai server restarting or
  * crashing: on restart the server reattaches to the running tmux session and
  * the in-flight turn continues uninterrupted.
  *
@@ -13,7 +13,7 @@ import type { ClaudePilotOptions, WaitIdleOptions, WaitOptions } from "./session
  * deterministic. Content still comes from the .jsonl tail (unchanged); tmux is
  * only about keeping the live process alive.
  */
-export interface TmuxPilotOptions extends ClaudePilotOptions {
+export interface TmuxPilotOptions extends PilotOptions {
   /** tmux session name (stable across restarts — derive from the session id). */
   tmuxName: string;
 }
@@ -64,7 +64,7 @@ export class TmuxPilot {
       this.attached = true;
     } else {
       // Strip a parent Claude Code session's vars (a nested claude that sees
-      // them may disable interactive mode), like ClaudePilot does.
+      // them may disable interactive mode), like PtyPilot does.
       const unset = Object.keys(process.env)
         .filter((k) => /^(CLAUDE|CLAUDECODE|AI_AGENT)/.test(k))
         .flatMap((k) => ["-u", k]);
@@ -160,7 +160,7 @@ export class TmuxPilot {
   }
 
   /**
-   * Types a prompt then presses Enter — same robustness as ClaudePilot:
+   * Types a prompt then presses Enter — same robustness as PtyPilot:
    * bracketed paste with retry until the text shows, then Enter with retry
    * until the turn is actually sent.
    */

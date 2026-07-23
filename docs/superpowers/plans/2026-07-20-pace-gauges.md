@@ -157,7 +157,7 @@ test("paceBlock : resetsAt absent ne bloque jamais", () => {
 Dans `package.json`, remplacer la ligne `"test"` :
 
 ```json
-    "test": "node --import tsx --test test/ .claude/skills/claudepilot-agents/test/",
+    "test": "node --import tsx --test test/ .claude/skills/shadok-ai-agents/test/",
 ```
 
 - [ ] **Step 3: Lancer les tests pour vérifier qu'ils échouent**
@@ -800,7 +800,7 @@ par :
     turn.className = "turn claude dialog";
     const label = document.createElement("span");
     label.className = "label";
-    label.textContent = "claudepilot — rythme dépassé";
+    label.textContent = "shadok-ai — rythme dépassé";
     const bubble = document.createElement("div");
     bubble.className = "bubble";
     const q = document.createElement("div");

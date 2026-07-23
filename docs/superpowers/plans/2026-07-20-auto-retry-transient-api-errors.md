@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Quand un tour meurt sur une erreur API transitoire (529 Overloaded, 5xx, timeout…), le serveur claudepilot soumet automatiquement `continue` après 15 s / 30 s / 60 s (3 tentatives max), annulé si l'utilisateur reprend la main.
+**Goal:** Quand un tour meurt sur une erreur API transitoire (529 Overloaded, 5xx, timeout…), le serveur shadok-ai soumet automatiquement `continue` après 15 s / 30 s / 60 s (3 tentatives max), annulé si l'utilisateur reprend la main.
 
 **Architecture:** Détection par pattern sur l'écran du TUI à la fin du tour (`finishTurn` dans `src/server.ts`), avec comparaison début/fin de tour pour ignorer une vieille erreur encore affichée. Fonctions pures de détection dans un nouveau module `src/retry.ts`. Timer et compteur portés par l'objet `Live` de la session. Le client web (`public/index.html`) affiche des lignes d'état informatives.
 

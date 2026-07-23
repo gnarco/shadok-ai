@@ -1,4 +1,4 @@
-# claudepilot — technical architecture
+# shadok-ai — technical architecture
 
 Deep dive behind `CLAUDE.md`. Read `CLAUDE.md` first for the map and invariants.
 
@@ -14,7 +14,7 @@ Deep dive behind `CLAUDE.md`. Read `CLAUDE.md` first for the map and invariants.
              │              ───────────▶ │  • screen watcher     │ read  └────┬─────┘
              │  /usage /live /diff …     └──────────────────────┘            │ writes
              ▼                                     ▲                          ▼
-   ~/.claudepilot/channels/<cwd>.json              └──── reads ── ~/.claude/projects/<cwd>/<id>.jsonl
+   ~/.shadok-ai/channels/<cwd>.json              └──── reads ── ~/.claude/projects/<cwd>/<id>.jsonl
    (channel + group lists)                                        (authoritative transcript)
 ```
 
@@ -38,7 +38,7 @@ Both implement the same interface (`start, screen, submit, press, write,
 waitForIdle, isWorking, onExit, hasExited, stop, kill`). The server picks one
 via `makePilot()`.
 
-- **`ClaudePilot` (node-pty)** — spawns `claude` as a child of the server,
+- **`PtyPilot` (node-pty)** — spawns `claude` as a child of the server,
   with `@xterm/headless` replaying the ANSI stream into a virtual screen so we
   can read it. Must forward xterm's query responses (cursor position, etc.)
   back to the PTY or the TUI ignores keystrokes. Dies with the server.
@@ -50,7 +50,7 @@ via `makePilot()`.
   tmux handles terminal queries itself, so that whole class of PTY hacks
   disappears. Does **not** survive a machine reboot (tmux dies then).
 
-`CLAUDEPILOT_TMUX=0` forces node-pty.
+`SHADOK_TMUX=0` forces node-pty.
 
 ## Session lifecycle
 
@@ -68,7 +68,7 @@ via `makePilot()`.
 4. **screen watcher** (300 ms): broadcasts `screen`, `context`, and catches a
    spontaneous resume (a background turn starting with no client prompt).
 5. **detach**: a client leaves → if it was the last, arm an idle-reclaim timer
-   (`CLAUDEPILOT_IDLE_MIN`, default 60 min). Reattaching cancels it.
+   (`SHADOK_IDLE_MIN`, default 60 min). Reattaching cancels it.
 6. **destroy**: process exits, explicit `stop`, or idle timeout → kill the
    pilot (and tmux session). Worktrees are NOT removed.
 
@@ -90,13 +90,13 @@ renders clickable buttons.
 
 - **Transcripts**: Claude Code's own `~/.claude/projects/<encoded-cwd>/<id>.jsonl`.
   History and streaming both read these. Keyed by cwd — see invariant #1.
-- **Channel + group lists**: `~/.claudepilot/channels/<encoded server cwd>.json`
+- **Channel + group lists**: `~/.shadok-ai/channels/<encoded server cwd>.json`
   and `…-groups.json`, via `src/channels.ts`. **Keyed by the server's launch
   directory** — each project/repo the server is started from keeps its own
   cockpit. Server is the source of truth; browser localStorage is an offline
   fallback. See invariant #6 for the erosion trap.
-- **Worktrees**: `~/.claudepilot/worktrees/<repo>-<tag>` on branch
-  `claudepilot/<tag>`. Durable.
+- **Worktrees**: `~/.shadok-ai/worktrees/<repo>-<tag>` on branch
+  `shadok-ai/<tag>`. Durable.
 
 ## Pace guardrail (`src/pace.ts`)
 
@@ -107,7 +107,7 @@ passes the ideal rises, so a block clears on its own once you're back within
 budget. `/usage` returns the verdict; a `prompt` bypasses with `force: true`.
 The UI shows two-bar gauges (consumed vs elapsed) and a per-message force path.
 
-## Spawning agents (`claudepilot-agents` skill)
+## Spawning agents (`shadok-ai-agents` skill)
 
 `pilotctl.mjs` is a thin WS/HTTP client so an agent (or a human script) can
 `spawn` / `prompt` / `choose` / `diff` other agents through the same server —

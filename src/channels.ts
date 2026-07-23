@@ -16,12 +16,12 @@ export interface Channel {
  * The channel list is stored server-side, keyed by the directory the server
  * was launched from — so the set of open channels survives a wiped browser,
  * another device, a server restart, or a reboot. Each launch directory keeps
- * its own list under ~/.claudepilot/channels/<encoded cwd>.json.
+ * its own list under ~/.shadok-ai/channels/<encoded cwd>.json.
  */
 function storeFile(kind: string): string {
   const enc = process.cwd().replace(/[^a-zA-Z0-9]/g, "-");
   const suffix = kind === "channels" ? "" : "-" + kind;
-  return path.join(os.homedir(), ".claudepilot", "channels", enc + suffix + ".json");
+  return path.join(os.homedir(), ".shadok-ai", "channels", enc + suffix + ".json");
 }
 
 function readJson(kind: string): any[] {

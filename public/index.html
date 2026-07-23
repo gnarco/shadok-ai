@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>claudepilot — cockpit</title>
+<title>shadok-ai — cockpit</title>
 <style>
   :root {
     --bg: #14161d;
@@ -757,7 +757,7 @@
 <body>
 
 <header>
-  <span class="brand">claudepilot</span>
+  <span class="brand">shadok-ai</span>
   <div class="gauge">
     <span class="label">Status</span>
     <span class="value"><span id="led" class="led"></span><span id="state">—</span></span>
@@ -1363,7 +1363,7 @@
     for (const t of tabs) {
       if (t.tokens) sum += t.tokens.input + t.tokens.cacheCreation + t.tokens.output;
     }
-    document.title = sum ? fmtTokens(sum) + " tok — claudepilot" : BASE_TITLE;
+    document.title = sum ? fmtTokens(sum) + " tok — shadok-ai" : BASE_TITLE;
   }
 
   /** Keeps header, setup, composer and engine room in sync with the active channel. */
@@ -1844,7 +1844,7 @@
       btn.addEventListener("click", () => {
         if (!s.sessionId) return;
         const t = active;
-        if (!t.customName) { t.customName = true; t.nameEl.textContent = s.branch.replace("claudepilot/", "wt-"); }
+        if (!t.customName) { t.customName = true; t.nameEl.textContent = s.branch.replace("shadok-ai/", "wt-"); }
         launchTab(t, { resume: s.sessionId, cwd: s.cwd, branch: s.branch, repo: cwd });
       });
       row.append(meta, badge, btn);
@@ -2203,7 +2203,7 @@
     turn.className = "turn claude dialog";
     const label = document.createElement("span");
     label.className = "label";
-    label.textContent = "claudepilot — pace exceeded";
+    label.textContent = "shadok-ai — pace exceeded";
     const bubble = document.createElement("div");
     bubble.className = "bubble";
     const q = document.createElement("div");
