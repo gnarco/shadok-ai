@@ -39,7 +39,8 @@ import {
 } from "./worktree.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const PORT = Number(process.env.PORT ?? 3789);
+const START_PORT = Number(process.env.PORT ?? 3789);
+const MAX_PORT_TRIES = 20;
 
 const app = express();
 app.use(express.json({ limit: "1mb" }));
@@ -151,6 +152,11 @@ app.delete("/secrets", (req, res) => {
 
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: "/ws" });
+// The ws server re-emits the http server's listen error; let the http server's
+// own handler drive the port fallback instead of crashing on the re-emit.
+wss.on("error", (err: NodeJS.ErrnoException) => {
+  if (err.code !== "EADDRINUSE") console.error(`ws server error: ${err.message}`);
+});
 
 type ClientMessage =
   | {
@@ -928,8 +934,21 @@ wss.on("connection", (ws: WebSocket) => {
 // Fold any legacy separate Telegram bindings into the one channel registry.
 migrateTgBindings();
 
-server.listen(PORT, () => {
-  console.log(`shadok-ai web: http://localhost:${PORT}`);
+// Port fallback: if the requested port is busy, try the next ones. The Telegram
+// bridge is started with the port we ACTUALLY bound, not the one we asked for.
+let port = START_PORT;
+server.on("error", (err: NodeJS.ErrnoException) => {
+  if (err.code === "EADDRINUSE" && port < START_PORT + MAX_PORT_TRIES) {
+    console.log(`port ${port} in use — trying ${port + 1}…`);
+    port++;
+    setTimeout(() => server.listen(port), 50);
+  } else {
+    console.error(`failed to listen: ${err.message}`);
+    process.exit(1);
+  }
+});
+server.listen(port, () => {
+  console.log(`shadok-ai web: http://localhost:${port}`);
   console.log(
     USE_TMUX
       ? "transport: tmux (agents survive server restarts)"
@@ -937,5 +956,5 @@ server.listen(PORT, () => {
   );
   // Telegram control bridge — connects to this server's own /ws as a client
   // (only if TELEGRAM_BOT_TOKEN is set), so Telegram shares the web sessions.
-  startTelegram(PORT);
+  startTelegram(port);
 });
