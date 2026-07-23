@@ -37,6 +37,25 @@ function tmuxOk(args: string[]): boolean {
   }
 }
 
+/** True when a tmux session with this exact name is alive. */
+export function tmuxHasSession(name: string): boolean {
+  return tmuxOk(["has-session", "-t", name]);
+}
+
+/**
+ * The working directory of a live tmux session's pane — the source of truth for
+ * a reattached session's cwd (a worktree agent's real directory), which the
+ * client can't always supply on resume. Null if the session is gone.
+ */
+export function tmuxPaneCwd(name: string): string | null {
+  try {
+    const p = tmux(["display-message", "-p", "-t", name, "#{pane_current_path}"]).trim();
+    return p || null;
+  } catch {
+    return null;
+  }
+}
+
 export class TmuxPilot {
   private readonly opts: Required<Pick<TmuxPilotOptions, "cols" | "rows">> & TmuxPilotOptions;
   private readonly name: string;

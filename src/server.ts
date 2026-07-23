@@ -14,7 +14,7 @@ import {
 import { findTransientErrors, newTransientErrors, RETRY_DELAYS_MS } from "./retry.js";
 import { screenShowsWork } from "./detect.js";
 import { PtyPilot } from "./session.js";
-import { TmuxPilot, tmuxAvailable } from "./tmux.js";
+import { TmuxPilot, tmuxAvailable, tmuxHasSession, tmuxPaneCwd } from "./tmux.js";
 import { scanUsage, sessionFilePath, tailSession, type TokenUsage } from "./tail.js";
 import { computePace, paceBlock, WINDOW_SEC } from "./pace.js";
 import { getUsage, type Window } from "./usage.js";
@@ -590,6 +590,14 @@ wss.on("connection", (ws: WebSocket) => {
           // agent's edits stay contained until the user merges them.
           let worktree: Worktree | null = null;
           let effectiveCwd = cwd;
+          // Resume: a reattached tmux agent knows its own cwd (e.g. a worktree
+          // path the client didn't supply — the Telegram bridge only passes the
+          // repo root). Trust the live pane so history and the transcript tail
+          // resolve to the right directory (invariant: cwd ↔ history).
+          if (resumed && USE_TMUX && tmuxHasSession("sk-" + id)) {
+            const paneCwd = tmuxPaneCwd("sk-" + id);
+            if (paneCwd && fs.existsSync(paneCwd)) effectiveCwd = paneCwd;
+          }
           if (msg.worktree && !resumed && isGitRepo(cwd)) {
             try {
               worktree = createWorktree(cwd, id.slice(0, 8));
