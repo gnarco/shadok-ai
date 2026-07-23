@@ -19,6 +19,7 @@ import { scanUsage, sessionFilePath, tailSession, type TokenUsage } from "./tail
 import { computePace, paceBlock, WINDOW_SEC } from "./pace.js";
 import { getUsage, type Window } from "./usage.js";
 import { loadChannels, saveChannels, loadGroups, saveGroups } from "./channels.js";
+import { startTelegram } from "./telegram.js";
 import {
   createWorktree,
   ensureWorktreeCheckout,
@@ -809,4 +810,7 @@ server.listen(PORT, () => {
       ? "transport: tmux (agents survive server restarts)"
       : "transport: node-pty (agents die with the server; install tmux or unset CLAUDEPILOT_TMUX=0 for durability)",
   );
+  // Telegram control bridge — connects to this server's own /ws as a client
+  // (only if TELEGRAM_BOT_TOKEN is set), so Telegram shares the web sessions.
+  startTelegram(PORT);
 });
