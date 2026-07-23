@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { screenShowsWork } from "../src/detect.js";
+import { screenShowsWork, inputHasProbe } from "../src/detect.js";
 
 const idle = [
   "⏺ Done.",
@@ -52,4 +52,21 @@ test("a QUOTED 'esc to interrupt' in prose is NOT working (the self-reference bu
 
 test("the ctx:/cost footer alone is not working", () => {
   assert.equal(screenShowsWork("  11:08:13  elapsed:34h05m41s  ctx:4%  ~$0,144"), false);
+});
+
+test("inputHasProbe: true while typed text sits in the input box", () => {
+  const screen = "some history\n\n❯ Refactor the pars\n\n  auto mode on";
+  assert.equal(inputHasProbe(screen, "Refactor the par"), true);
+});
+
+test("inputHasProbe: false once the box cleared after Enter (even if echo scrolled away)", () => {
+  // The prompt was sent; the input box is empty and the echo is gone.
+  const cleared = "✻ Baked for 3s\n\n❯ \n\n  auto mode on";
+  assert.equal(inputHasProbe(cleared, "Refactor the par"), false);
+});
+
+test("inputHasProbe: false when the probe is only in scrollback, not the input line", () => {
+  // A fast turn: the echo is still visible above but the box is empty.
+  const scrolled = "❯ Refactor the parser now\n⏺ done.\n\n❯ \n";
+  assert.equal(inputHasProbe(scrolled, "Refactor the par"), false);
 });

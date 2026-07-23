@@ -1,6 +1,6 @@
 import pty from "node-pty";
 import xterm from "@xterm/headless";
-import { screenShowsWork } from "./detect.js";
+import { screenShowsWork, inputHasProbe } from "./detect.js";
 
 const { Terminal } = xterm;
 
@@ -155,21 +155,13 @@ export class ClaudePilot {
       }
     }
     if (!typed) {
-      throw new Error(
-        `submit: the text never appeared in the input box.\n${this.screen()}`,
-      );
+      throw this.submitError("the text never appeared in the input box");
     }
     await sleep(200);
-    // Sent = spinner visible, or input box empty again while the text is
-    // still on screen ("❯ …" echo in the transcript).
-    const submitted = (s: string) => {
-      if (screenShowsWork(s)) return true;
-      const lines = s.split("\n");
-      const promptLines = lines.filter((l) => l.trimStart().startsWith("❯"));
-      const inputLine = promptLines[promptLines.length - 1] ?? "";
-      const inputEmpty = inputLine.replace("❯", "").trim() === "";
-      return inputEmpty && lines.some((l) => l.includes(probe));
-    };
+    // Sent = spinner visible, or the text we typed has LEFT the input box.
+    // (Not "echo still on screen" — a fast turn scrolls it away and that
+    // false-negatived, dumping the whole screen as an error.)
+    const submitted = (s: string) => screenShowsWork(s) || !inputHasProbe(s, probe);
     for (let attempt = 0; attempt < 3; attempt++) {
       this.press("enter");
       try {
@@ -179,7 +171,13 @@ export class ClaudePilot {
         // Enter was swallowed by the TUI: try again.
       }
     }
-    throw new Error(`submit: the prompt does not seem to have been sent.\n${this.screen()}`);
+    throw this.submitError("the prompt does not seem to have been sent");
+  }
+
+  /** A concise client-facing error; the full screen goes to the server log only. */
+  private submitError(reason: string): Error {
+    console.error(`submit failed — ${reason}. Screen:\n${this.screen()}`);
+    return new Error(`submit: ${reason}.`);
   }
 
   press(key: "enter" | "escape" | "up" | "down" | "left" | "right" | "tab" | "ctrl-c"): void {

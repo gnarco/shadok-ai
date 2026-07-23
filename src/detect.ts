@@ -29,3 +29,17 @@ const SPINNER_STATUS =
 export function screenShowsWork(screen: string): boolean {
   return ESC_TO_INTERRUPT.test(screen) || SPINNER_STATUS.test(screen);
 }
+
+/**
+ * True while the text we just typed is still sitting in the input box (the
+ * last "❯ …" line). Used to confirm a submit: before Enter the probe is in the
+ * box; once Enter is accepted the box clears, so `!inputHasProbe` means "sent".
+ * This is robust to a fast turn scrolling the echo out of the transcript —
+ * unlike looking for the probe anywhere on screen, which false-negatived and
+ * dumped the whole screen as an error.
+ */
+export function inputHasProbe(screen: string, probe: string): boolean {
+  const promptLines = screen.split("\n").filter((l) => l.trimStart().startsWith("❯"));
+  const inputLine = promptLines[promptLines.length - 1] ?? "";
+  return inputLine.includes(probe);
+}
