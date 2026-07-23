@@ -152,6 +152,34 @@ export function makeTyping(beat: () => void, intervalMs = 4000): { start: () => 
   };
 }
 
+/** Telegram delivers an album (media_group_id) as separate messages, the
+ *  caption often on only one of them. Buffer them per group: each add
+ *  re-arms a short timer; when it fires, the whole group is flushed at once
+ *  so a 3-photo album costs one turn, not three. */
+export function makeAlbumBuffer<T>(
+  flush: (groupId: string, items: T[]) => void,
+  delayMs = 1500,
+): { add: (groupId: string, item: T) => void } {
+  const groups = new Map<string, { items: T[]; timer: NodeJS.Timeout }>();
+  return {
+    add(groupId, item) {
+      const g = groups.get(groupId);
+      if (g) {
+        g.items.push(item);
+        g.timer.refresh();
+        return;
+      }
+      const items = [item];
+      const timer = setTimeout(() => {
+        groups.delete(groupId);
+        flush(groupId, items);
+      }, delayMs);
+      timer.unref?.(); // ne jamais retenir le process pour un buffer
+      groups.set(groupId, { items, timer });
+    },
+  };
+}
+
 interface DialogOption {
   n: number;
   label: string;

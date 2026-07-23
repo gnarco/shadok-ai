@@ -11,6 +11,7 @@ import {
   attachmentOf,
   mediaFileName,
   attachmentPrompt,
+  makeAlbumBuffer,
 } from "../src/telegram.js";
 
 test("bindKey: DM, group, and forum topic map to distinct keys", () => {
@@ -219,4 +220,36 @@ test("attachmentPrompt: plusieurs pièces, caption vide ignorée", () => {
     ),
     "[Image jointe : /m/a.jpg]\n[Fichier joint : /m/b.zip]",
   );
+});
+
+test("makeAlbumBuffer: regroupe les items d'un même album en un seul flush", async () => {
+  const flushed: [string, number[]][] = [];
+  const buf = makeAlbumBuffer<number>((gid, items) => flushed.push([gid, items]), 30);
+  buf.add("g1", 1);
+  buf.add("g1", 2);
+  buf.add("g1", 3);
+  await new Promise((r) => setTimeout(r, 90));
+  assert.deepEqual(flushed, [["g1", [1, 2, 3]]]);
+});
+
+test("makeAlbumBuffer: chaque add réarme le timer (pas de flush partiel)", async () => {
+  const flushed: number[][] = [];
+  const buf = makeAlbumBuffer<number>((_gid, items) => flushed.push(items), 40);
+  buf.add("g", 1);
+  await new Promise((r) => setTimeout(r, 25)); // < délai : pas encore flushé
+  buf.add("g", 2); // réarme
+  await new Promise((r) => setTimeout(r, 25));
+  assert.equal(flushed.length, 0); // 50 ms après le 1er add mais 25 ms après le 2e
+  await new Promise((r) => setTimeout(r, 40));
+  assert.deepEqual(flushed, [[1, 2]]);
+});
+
+test("makeAlbumBuffer: deux albums indépendants", async () => {
+  const flushed = new Map<string, string[]>();
+  const buf = makeAlbumBuffer<string>((gid, items) => flushed.set(gid, items), 20);
+  buf.add("a", "x");
+  buf.add("b", "y");
+  await new Promise((r) => setTimeout(r, 80));
+  assert.deepEqual(flushed.get("a"), ["x"]);
+  assert.deepEqual(flushed.get("b"), ["y"]);
 });
