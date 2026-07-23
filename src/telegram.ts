@@ -7,6 +7,7 @@ import {
   loadTgGroup,
   saveTgGroup,
 } from "./channels.js";
+import { resolveRepo, secretKeys, setSecret, deleteSecret } from "./secrets.js";
 import { readAndClearUpdateResult } from "./update-flag.js";
 import { UPDATE_EXIT_CODE } from "./supervisor.js";
 
@@ -385,7 +386,7 @@ export function startTelegram(port: number): void {
       switch (cmd.cmd) {
         case "start":
         case "help":
-          await reply(chat.id, threadId, "shadok-ai — talk to your agent by sending a message.\n/spawn <name> — new agent in a topic (groups)\n/new — reset · /end — stop · /list — bindings");
+          await reply(chat.id, threadId, "shadok-ai — talk to your agent by sending a message.\n/spawn <name> — new agent in a topic (groups)\n/new — reset · /end — stop · /list — bindings\n/secrets — list · /secret KEY value — set · /unsecret KEY");
           return;
         case "setup":
           if (isGroup) await reply(chat.id, threadId, "✅ already this instance's board.");
@@ -434,6 +435,47 @@ export function startTelegram(port: number): void {
           await reply(chat.id, threadId, "🔄 updating… I'll be back in a moment.");
           // Ask the supervisor to fetch @latest and respawn us.
           process.exit(UPDATE_EXIT_CODE);
+        }
+        case "secrets": {
+          const repo = resolveRepo(channelForTelegram(chat.id, threadId)?.cwd || process.cwd());
+          const keys = secretKeys(repo);
+          await reply(
+            chat.id,
+            threadId,
+            `🔐 secrets for ${repo}:\n${keys.length ? keys.map((k) => "• " + k).join("\n") : "(none)"}\n\nSet: /secret KEY value  ·  remove: /unsecret KEY`,
+          );
+          return;
+        }
+        case "secret": {
+          // /secret KEY value — store then DELETE the message so the value
+          // doesn't linger in the chat history.
+          const sp = cmd.arg.indexOf(" ");
+          const skey = sp === -1 ? cmd.arg : cmd.arg.slice(0, sp);
+          const sval = sp === -1 ? "" : cmd.arg.slice(sp + 1);
+          if (!skey || !sval) {
+            await reply(chat.id, threadId, "Usage: /secret KEY value");
+            return;
+          }
+          const repo = resolveRepo(channelForTelegram(chat.id, threadId)?.cwd || process.cwd());
+          setSecret(repo, skey.trim(), sval);
+          const del = await tg("deleteMessage", { chat_id: chat.id, message_id: msg.message_id });
+          await reply(
+            chat.id,
+            threadId,
+            `🔐 ${skey.trim()} saved for ${repo}.${del?.ok ? " (your message was deleted)" : "\n⚠️ I couldn't delete your message — remove it manually; the value is exposed in history."} Applies to newly spawned/restarted agents.`,
+          );
+          return;
+        }
+        case "unsecret": {
+          const skey = cmd.arg.trim();
+          if (!skey) {
+            await reply(chat.id, threadId, "Usage: /unsecret KEY");
+            return;
+          }
+          const repo = resolveRepo(channelForTelegram(chat.id, threadId)?.cwd || process.cwd());
+          deleteSecret(repo, skey);
+          await reply(chat.id, threadId, `🔐 ${skey} removed for ${repo}.`);
+          return;
         }
       }
     }
