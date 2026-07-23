@@ -3,18 +3,22 @@ import os from "node:os";
 import path from "node:path";
 
 /**
- * Global CLI config, stored at ~/.shadok-ai/config.json (mode 600). Holds the
- * Telegram bot token and the port. Replaces the old telegram.env shell hack:
- * the token now lives here and is passed to the server child via env.
+ * Global CLI config at ~/.shadok-ai/config.json (mode 600). The Telegram bot
+ * token is **per launch directory** (`tokens[cwd]`), so each instance you run
+ * from a different directory has its own bot — like the channel list. Port is
+ * global.
  *
- * `telegramToken` semantics:
- *   undefined → never asked yet (first run should prompt)
+ * Per-cwd token semantics:
+ *   undefined → never asked for this dir yet (first run should prompt)
  *   null      → asked and deliberately skipped (never prompt again)
  *   string    → the token
  */
 export interface Config {
-  telegramToken?: string | null;
   port?: number;
+  /** @deprecated legacy single global token — migrated into `tokens` on boot. */
+  telegramToken?: string | null;
+  /** Per launch-directory bot token, keyed by absolute cwd. */
+  tokens?: Record<string, string | null>;
 }
 
 export const SHADOK_DIR = path.join(os.homedir(), ".shadok-ai");
@@ -32,30 +36,28 @@ export function loadConfig(): Config {
 
 export function saveConfig(cfg: Config): void {
   fs.mkdirSync(SHADOK_DIR, { recursive: true });
-  // 600: the token is a secret. Write then chmod (umask-independent).
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(cfg, null, 2), { mode: 0o600 });
-  fs.chmodSync(CONFIG_FILE, 0o600);
+  fs.chmodSync(CONFIG_FILE, 0o600); // the token is a secret; enforce 600
+}
+
+/** This directory's token entry (undefined = never asked). */
+export function tokenForCwd(cfg: Config, cwd: string): string | null | undefined {
+  return cfg.tokens?.[cwd];
+}
+
+export function setTokenForCwd(cfg: Config, cwd: string, token: string | null): void {
+  (cfg.tokens ??= {})[cwd] = token;
+  saveConfig(cfg);
 }
 
 /**
- * One-time migration of the legacy ~/.shadok-ai/telegram.env
- * (`TELEGRAM_BOT_TOKEN=...`) into config.json. Returns the migrated token, or
- * null if there was nothing to migrate. The env file is left on disk but no
- * longer read by anything.
+ * The effective token for an instance launched in `cwd`: an explicit env var
+ * always wins, otherwise this directory's configured token. No global fallback —
+ * a different directory gets a different bot (or none).
  */
-export function migrateLegacyEnv(cfg: Config): string | null {
-  if (cfg.telegramToken !== undefined) return null; // already decided
-  let raw: string;
-  try {
-    raw = fs.readFileSync(LEGACY_ENV, "utf8");
-  } catch {
-    return null;
-  }
-  const token = parseLegacyToken(raw);
-  if (!token) return null;
-  cfg.telegramToken = token;
-  saveConfig(cfg);
-  return token;
+export function effectiveToken(cfg: Config, cwd: string, env: NodeJS.ProcessEnv = process.env): string | null {
+  if (env.TELEGRAM_BOT_TOKEN) return env.TELEGRAM_BOT_TOKEN;
+  return cfg.tokens?.[cwd] ?? null;
 }
 
 /** Pull TELEGRAM_BOT_TOKEN out of a shell-style env file body. */
@@ -65,10 +67,29 @@ export function parseLegacyToken(raw: string): string | null {
 }
 
 /**
- * The effective token to hand the server: an explicit env var always wins,
- * otherwise the configured value (a null/undefined config means "no token").
+ * One-time migration of the OLD global token (the `telegram.env` file and the
+ * legacy `telegramToken` config field, both global) into this directory's token
+ * — but only for an already-established instance (`established`, i.e. it has a
+ * bound Telegram group), so an existing setup keeps its bot while a brand-new
+ * directory is prompted for its own. Both global sources are consumed (env file
+ * renamed, config field deleted) so they never leak to another directory.
  */
-export function effectiveToken(cfg: Config, env: NodeJS.ProcessEnv = process.env): string | null {
-  if (env.TELEGRAM_BOT_TOKEN) return env.TELEGRAM_BOT_TOKEN;
-  return cfg.telegramToken ?? null;
+export function migrateLegacyToken(cfg: Config, cwd: string, established: boolean): void {
+  if (cfg.tokens?.[cwd] !== undefined || !established) return;
+  let token: string | null = null;
+  try {
+    token = parseLegacyToken(fs.readFileSync(LEGACY_ENV, "utf8"));
+  } catch {
+    /* no env file */
+  }
+  if (!token && typeof cfg.telegramToken === "string") token = cfg.telegramToken;
+  if (!token) return;
+  (cfg.tokens ??= {})[cwd] = token;
+  delete cfg.telegramToken; // consume the global field
+  try {
+    fs.renameSync(LEGACY_ENV, LEGACY_ENV + ".migrated"); // consume the global file
+  } catch {
+    /* best effort */
+  }
+  saveConfig(cfg);
 }

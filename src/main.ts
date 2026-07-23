@@ -4,7 +4,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "./args.js";
-import { effectiveToken, loadConfig, migrateLegacyEnv, saveConfig } from "./config.js";
+import {
+  effectiveToken,
+  loadConfig,
+  migrateLegacyToken,
+  setTokenForCwd,
+  tokenForCwd,
+} from "./config.js";
+import { loadTgGroup } from "./channels.js";
 import { promptToken } from "./setup-prompt.js";
 import { runSupervisor, type SupervisorDeps } from "./supervisor.js";
 import { serverEntry, update } from "./updater.js";
@@ -46,23 +53,28 @@ async function main(): Promise<number> {
     return 0;
   }
 
+  // The bot token is per launch directory — a different directory = a different
+  // bot (or none), like the channel list.
+  const cwd = process.cwd();
   const cfg = loadConfig();
-  migrateLegacyEnv(cfg);
+  // Keep an existing setup working: adopt the old GLOBAL token here iff this dir
+  // already has a bound Telegram group; a brand-new dir prompts for its own.
+  migrateLegacyToken(cfg, cwd, loadTgGroup() !== null);
 
-  // First-run token prompt: only when we've never asked, it's interactive, and
-  // Telegram isn't disabled. A skip is recorded (null) so we never nag again.
+  // First-run token prompt: only when we've never asked for THIS dir, it's
+  // interactive, and Telegram isn't disabled. A skip is recorded (null) so we
+  // never nag again.
   if (
     !args.noTelegram &&
-    cfg.telegramToken === undefined &&
+    tokenForCwd(cfg, cwd) === undefined &&
     !process.env.TELEGRAM_BOT_TOKEN &&
     process.stdin.isTTY
   ) {
-    cfg.telegramToken = await promptToken();
-    saveConfig(cfg);
+    setTokenForCwd(cfg, cwd, await promptToken());
   }
 
   const port = args.port ?? cfg.port ?? (Number(process.env.PORT) || 3789);
-  const token = args.noTelegram ? null : effectiveToken(cfg);
+  const token = args.noTelegram ? null : effectiveToken(cfg, cwd);
 
   const childEnv: NodeJS.ProcessEnv = { ...process.env, PORT: String(port) };
   if (token) childEnv.TELEGRAM_BOT_TOKEN = token;
