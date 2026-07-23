@@ -10,9 +10,17 @@
     "prepublishOnly": "npm run build",
     "web": "node dist/server.js"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": ["claude", "claude-code", "cockpit", "telegram", "agents", "tmux"],
+  "author": "gnarco",
   "license": "ISC",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gnarco/shadok-ai.git"
+  },
+  "homepage": "https://github.com/gnarco/shadok-ai#readme",
+  "bugs": {
+    "url": "https://github.com/gnarco/shadok-ai/issues"
+  },
   "description": "Web cockpit that drives multiple real Claude Code TUI sessions in parallel, with Telegram control",
   "type": "module",
   "engines": {
