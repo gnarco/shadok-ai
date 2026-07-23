@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { screenShowsWork, inputHasProbe } from "./detect.js";
+import { screenShowsWork, inputText } from "./detect.js";
 import type { PilotOptions, WaitIdleOptions, WaitOptions } from "./session.js";
 
 /**
@@ -187,12 +187,14 @@ export class TmuxPilot {
    * until the turn is actually sent.
    */
   async submit(text: string): Promise<void> {
-    const probe = text.slice(0, 15);
     let typed = false;
     for (let attempt = 0; attempt < 6; attempt++) {
       this.paste(text);
       try {
-        await this.waitFor((s) => s.includes(probe), { timeoutMs: 2_000 });
+        // Content-agnostic: the box just needs to be non-empty. A big paste is
+        // collapsed to "[Pasted text +N lines]", so looking for the literal
+        // text fails — which used to abort before Enter was ever pressed.
+        await this.waitFor((s) => inputText(s) !== "", { timeoutMs: 2_000 });
         typed = true;
         break;
       } catch {
@@ -204,10 +206,10 @@ export class TmuxPilot {
       throw this.submitError("the text never appeared in the input box");
     }
     await sleep(200);
-    // Enter was accepted once the text we typed has LEFT the input box (or the
-    // spinner is up). Don't require the echo to still be visible in scrollback:
-    // a fast turn scrolls it away and that caused false "not sent" dumps.
-    const submitted = (s: string) => screenShowsWork(s) || !inputHasProbe(s, probe);
+    // Sent once the input box is empty again (or the spinner is up). Requiring
+    // it to be truly empty makes the Enter retry robust to the bracketed-paste
+    // race, and works for collapsed pastes (whose text is never on screen).
+    const submitted = (s: string) => screenShowsWork(s) || inputText(s) === "";
     for (let attempt = 0; attempt < 3; attempt++) {
       this.press("enter");
       try {

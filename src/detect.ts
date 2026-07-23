@@ -43,3 +43,16 @@ export function inputHasProbe(screen: string, probe: string): boolean {
   const inputLine = promptLines[promptLines.length - 1] ?? "";
   return inputLine.includes(probe);
 }
+
+/**
+ * The current content of the input box (the last "❯ …" line), without the "❯".
+ * Submit detection keys off this being non-empty (something is typed/pasted)
+ * then empty again (sent) — content-agnostic, so it also works when the TUI
+ * collapses a big paste into a "[Pasted text +N lines]" placeholder (the
+ * literal text isn't on screen to look for).
+ */
+export function inputText(screen: string): string {
+  const promptLines = screen.split("\n").filter((l) => l.trimStart().startsWith("❯"));
+  const inputLine = promptLines[promptLines.length - 1] ?? "";
+  return inputLine.replace(/^\s*❯\s?/, "").trim();
+}

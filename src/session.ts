@@ -1,6 +1,6 @@
 import pty from "node-pty";
 import xterm from "@xterm/headless";
-import { screenShowsWork, inputHasProbe } from "./detect.js";
+import { screenShowsWork, inputText } from "./detect.js";
 
 const { Terminal } = xterm;
 
@@ -141,12 +141,14 @@ export class PtyPilot {
    * echo in the transcript), with retries.
    */
   async submit(text: string): Promise<void> {
-    const probe = text.slice(0, 15);
     let typed = false;
     for (let attempt = 0; attempt < 6; attempt++) {
       this.write(`\x1b[200~${text}\x1b[201~`);
       try {
-        await this.waitFor((s) => s.includes(probe), { timeoutMs: 2_000 });
+        // The box just needs to be non-empty — a big paste collapses to a
+        // "[Pasted text +N lines]" placeholder, so looking for the literal text
+        // fails and used to abort before Enter was pressed.
+        await this.waitFor((s) => inputText(s) !== "", { timeoutMs: 2_000 });
         typed = true;
         break;
       } catch {
@@ -158,10 +160,9 @@ export class PtyPilot {
       throw this.submitError("the text never appeared in the input box");
     }
     await sleep(200);
-    // Sent = spinner visible, or the text we typed has LEFT the input box.
-    // (Not "echo still on screen" — a fast turn scrolls it away and that
-    // false-negatived, dumping the whole screen as an error.)
-    const submitted = (s: string) => screenShowsWork(s) || !inputHasProbe(s, probe);
+    // Sent once the input box is empty again (or the spinner is up) — robust to
+    // the bracketed-paste race and to collapsed pastes.
+    const submitted = (s: string) => screenShowsWork(s) || inputText(s) === "";
     for (let attempt = 0; attempt < 3; attempt++) {
       this.press("enter");
       try {
