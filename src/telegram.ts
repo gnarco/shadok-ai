@@ -130,6 +130,12 @@ export function renameTelegramTopic(chatId: number, threadId: number, name: stri
   renameTopicImpl?.(chatId, threadId, name);
 }
 
+/** Close (archive) a Telegram forum topic when its session ends elsewhere. */
+let closeTopicImpl: ((chatId: number, threadId: number) => void) | null = null;
+export function closeTelegramTopic(chatId: number, threadId: number): void {
+  closeTopicImpl?.(chatId, threadId);
+}
+
 export function startTelegram(port: number): void {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   if (!token) return;
@@ -156,6 +162,10 @@ export function startTelegram(port: number): void {
   // Web-side rename → rename the matching Telegram topic (best effort).
   renameTopicImpl = (chatId, threadId, name) => {
     tg("editForumTopic", { chat_id: chatId, message_thread_id: threadId, name: name.slice(0, 128) });
+  };
+  // Session ended elsewhere → archive its topic (idempotent; ignore errors).
+  closeTopicImpl = (chatId, threadId) => {
+    tg("closeForumTopic", { chat_id: chatId, message_thread_id: threadId });
   };
 
   const send = async (b: Bridge, text: string) => {
@@ -453,9 +463,24 @@ export function startTelegram(port: number): void {
     if (ch) upsertChannel({ sessionId: ch.sessionId, name });
   };
 
+  // A topic closed/deleted in Telegram → end its session everywhere. Sending
+  // `stop` lets the server tear down + drop it from the registry (which removes
+  // the web tab via the sync poll). No bridge → just unbind.
+  const handleTopicClosed = (msg: any) => {
+    const ch = channelForTelegram(msg.chat.id, msg.message_thread_id);
+    if (!ch) return;
+    const key = bindKey(msg.chat, msg.message_thread_id);
+    const b = bridges.get(key);
+    if (b?.ws.readyState === WebSocket.OPEN) b.ws.send(JSON.stringify({ type: "stop" }));
+    else removeChannel(ch.sessionId);
+    bridges.delete(key);
+  };
+
   const handleUpdate = async (u: any) => {
     if (u.callback_query) return handleCallback(u.callback_query);
     if (u.message?.forum_topic_edited) return handleTopicEdited(u.message);
+    if (u.message?.forum_topic_closed || u.message?.forum_topic_deleted)
+      return handleTopicClosed(u.message);
     if (u.message) return handleMessage(u.message);
   };
 
