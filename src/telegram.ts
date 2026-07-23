@@ -303,7 +303,9 @@ export function startTelegram(port: number): void {
           const name = cmd.arg || "agent";
           const t = await tg("createForumTopic", { chat_id: chat.id, name: name.slice(0, 128) });
           if (!t?.ok) {
-            await reply(chat.id, threadId, "⚠️ Couldn't create a topic — enable Topics in the group and make me an admin with 'Manage topics'.");
+            const why = t?.description ? ` (Telegram: ${t.description})` : "";
+            console.log(`telegram: createForumTopic failed for ${chat.id}:`, t?.description ?? t);
+            await reply(chat.id, threadId, `⚠️ Couldn't create a topic${why}.\nMake sure this is a supergroup with Topics enabled, and that I'm an admin with 'Manage topics'.`);
             return;
           }
           const newThread = t.result.message_thread_id;
