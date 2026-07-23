@@ -51,6 +51,39 @@ export function parseCommand(text: string): { cmd: string; arg: string } | null 
   return m ? { cmd: m[1].toLowerCase(), arg: m[2].trim() } : null;
 }
 
+const htmlEscape = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+/**
+ * Render an agent's Markdown into the small HTML subset Telegram accepts
+ * (`parse_mode: "HTML"`): code fences → <pre>, inline `code`, **bold**, *italic*,
+ * headings → bold, [links](url), and `- ` bullets → •. Code is extracted first
+ * so its contents aren't reformatted; everything is HTML-escaped so the output
+ * is always well-formed (unmatched markers stay literal — the caller can safely
+ * fall back to plain text if Telegram ever rejects it).
+ */
+export function mdToTelegramHtml(md: string): string {
+  // Stash code (block + inline) behind sentinels that never collide with real
+  // content, so it is not reformatted or double-escaped.
+  const parts: string[] = [];
+  const stash = (html: string) => {
+    parts.push(html);
+    return `⟦${parts.length - 1}⟧`;
+  };
+  let s = md.replace(/```[^\n]*\n?([\s\S]*?)```/g, (_m, code: string) =>
+    stash(`<pre>${htmlEscape(code.replace(/\n$/, ""))}</pre>`),
+  );
+  s = s.replace(/`([^`\n]+)`/g, (_m, c: string) => stash(`<code>${htmlEscape(c)}</code>`));
+  s = htmlEscape(s); // sentinels + markers survive (only &<> are touched)
+  s = s.replace(/^\s{0,3}#{1,6}\s+(.+?)\s*#*$/gm, "<b>$1</b>"); // headings -> bold
+  s = s.replace(/\*\*([^\n]+?)\*\*/g, "<b>$1</b>").replace(/__([^\n]+?)__/g, "<b>$1</b>");
+  s = s.replace(/(^|[^*\w])\*([^*\n]+?)\*(?!\w)/g, "$1<i>$2</i>"); // *italic*
+  s = s.replace(/(^|[^_\w])_([^_\n]+?)_(?!\w)/g, "$1<i>$2</i>"); // _italic_
+  s = s.replace(/\[([^\]]+?)\]\((https?:\/\/[^)\s]+?)\)/g, '<a href="$2">$1</a>');
+  s = s.replace(/^(\s*)[-*+]\s+/gm, "$1• "); // bullets
+  s = s.replace(/⟦(\d+)⟧/g, (_m, i: string) => parts[+i]);
+  return s;
+}
+
 /** Telegram's "typing…" indicator lives ~5 s per sendChatAction and dies on
  *  every sendMessage — a single beat can't cover a turn that runs for minutes.
  *  This keeps it alive: an immediate beat, then one every `intervalMs` until
@@ -174,13 +207,17 @@ export function startTelegram(port: number): void {
   };
 
   const send = async (b: Bridge, text: string) => {
+    const to = { chat_id: b.chatId, ...(b.threadId ? { message_thread_id: b.threadId } : {}) };
     for (const part of chunk(text)) {
-      await tg("sendMessage", {
-        chat_id: b.chatId,
-        ...(b.threadId ? { message_thread_id: b.threadId } : {}),
-        text: part,
+      // Render the agent's Markdown as Telegram HTML; if Telegram rejects it
+      // (malformed after a mid-chunk split), resend the raw text as-is.
+      const r = await tg("sendMessage", {
+        ...to,
+        text: mdToTelegramHtml(part),
+        parse_mode: "HTML",
         disable_web_page_preview: true,
       });
+      if (!r?.ok) await tg("sendMessage", { ...to, text: part, disable_web_page_preview: true });
     }
   };
 

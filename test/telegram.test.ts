@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { bindKey, chunk, parseCommand, dialogKeyboard, parseCallback, makeTyping } from "../src/telegram.js";
+import { bindKey, chunk, parseCommand, dialogKeyboard, parseCallback, makeTyping, mdToTelegramHtml } from "../src/telegram.js";
 
 test("bindKey: DM, group, and forum topic map to distinct keys", () => {
   assert.equal(bindKey({ id: 42, type: "private" }), "private:42");
@@ -114,4 +114,33 @@ test("parseCallback: choose / toggle / confirm, and garbage → null", () => {
   assert.deepEqual(parseCallback("s"), { kind: "confirm" });
   assert.equal(parseCallback("x:1"), null);
   assert.equal(parseCallback(""), null);
+});
+
+test("mdToTelegramHtml: bold/italic/inline code, digits untouched", () => {
+  assert.equal(
+    mdToTelegramHtml("**b** and *i* and `c` and 3 files"),
+    "<b>b</b> and <i>i</i> and <code>c</code> and 3 files",
+  );
+});
+
+test("mdToTelegramHtml: heading → bold, bullets → •, links", () => {
+  assert.equal(
+    mdToTelegramHtml("# Title\n- a\n- b\n[t](https://x.com)"),
+    '<b>Title</b>\n• a\n• b\n<a href="https://x.com">t</a>',
+  );
+});
+
+test("mdToTelegramHtml: code fence content is escaped, not reformatted", () => {
+  assert.equal(
+    mdToTelegramHtml("```js\nconst x = 1 < 2 && *y*;\n```"),
+    "<pre>const x = 1 &lt; 2 &amp;&amp; *y*;</pre>",
+  );
+});
+
+test("mdToTelegramHtml: bare <>& are escaped so the HTML is well-formed", () => {
+  assert.equal(mdToTelegramHtml("a <b> & c"), "a &lt;b&gt; &amp; c");
+});
+
+test("mdToTelegramHtml: a lone marker stays literal (no unbalanced tag)", () => {
+  assert.equal(mdToTelegramHtml("2 * 3 = 6"), "2 * 3 = 6");
 });
