@@ -477,6 +477,15 @@ export function startTelegram(port: number): void {
           await reply(chat.id, threadId, `🔐 ${skey} removed for ${repo}.`);
           return;
         }
+        case "restart": {
+          // Re-spawn this topic's agent so it picks up freshly-added secrets.
+          const rb = bridgeFor(key, chat.id, threadId);
+          const rmsg = { type: "restart" };
+          if (rb.ready && rb.ws.readyState === WebSocket.OPEN) rb.ws.send(JSON.stringify(rmsg));
+          else rb.pendingActions.push(rmsg);
+          await reply(chat.id, threadId, "♻️ restarting the agent to apply secrets…");
+          return;
+        }
       }
     }
 
