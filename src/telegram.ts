@@ -1,5 +1,12 @@
 import WebSocket from "ws";
-import { loadTgBindings, saveTgBindings, loadTgGroup, saveTgGroup } from "./channels.js";
+import {
+  loadChannels,
+  upsertChannel,
+  removeChannel,
+  channelForTelegram,
+  loadTgGroup,
+  saveTgGroup,
+} from "./channels.js";
 import { readAndClearUpdateResult } from "./update-flag.js";
 import { UPDATE_EXIT_CODE } from "./supervisor.js";
 
@@ -109,6 +116,7 @@ interface Bridge {
   pendingActions: object[]; // dialog actions (choose/toggle/confirm) queued until ready
   dialogMsgId?: number; // Telegram message showing the current dialog keyboard
   worktree?: boolean; // spawn the session in an isolated worktree
+  name?: string; // channel name (a /spawn topic name), stored in the registry
   typing: { start: () => void; stop: () => void }; // "typing…" heartbeat for the running turn
 }
 
@@ -146,12 +154,18 @@ export function startTelegram(port: number): void {
     }
   };
 
+  // Fold each bridge into the ONE registry: its session becomes a channel
+  // carrying the Telegram binding, so it shows up (and is pilotable) in the web
+  // UI too. The server fills cwd/branch on ready; here we own the binding.
   const persist = () => {
-    saveTgBindings(
-      [...bridges.values()]
-        .filter((b) => b.sessionId)
-        .map((b) => ({ key: b.key, sessionId: b.sessionId, chatId: b.chatId, threadId: b.threadId })),
-    );
+    for (const b of bridges.values()) {
+      if (!b.sessionId) continue;
+      upsertChannel({
+        sessionId: b.sessionId,
+        name: b.name,
+        telegram: { chatId: b.chatId, ...(b.threadId ? { threadId: b.threadId } : {}) },
+      });
+    }
   };
 
   /** Open (or resume) a session for a chat/topic and wire its events to Telegram. */
@@ -159,7 +173,7 @@ export function startTelegram(port: number): void {
     key: string,
     chatId: number,
     threadId: number | undefined,
-    opts: { resumeId?: string; worktree?: boolean } = {},
+    opts: { resumeId?: string; worktree?: boolean; name?: string } = {},
   ): Bridge => {
     const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
     const b: Bridge = {
@@ -172,6 +186,7 @@ export function startTelegram(port: number): void {
       pending: [],
       pendingActions: [],
       worktree: opts.worktree,
+      name: opts.name,
       typing: makeTyping(() =>
         tg("sendChatAction", {
           chat_id: chatId,
@@ -273,7 +288,7 @@ export function startTelegram(port: number): void {
   const bridgeFor = (key: string, chatId: number, threadId?: number): Bridge => {
     const existing = bridges.get(key);
     if (existing && existing.ws.readyState <= WebSocket.OPEN) return existing;
-    const saved = loadTgBindings().find((x: any) => x.key === key);
+    const saved = channelForTelegram(chatId, threadId);
     return openBridge(key, chatId, threadId, { resumeId: saved?.sessionId });
   };
 
@@ -291,14 +306,17 @@ export function startTelegram(port: number): void {
       ...extra,
     });
 
-  const endBinding = (key: string) => {
+  const endBinding = (key: string, chatId: number, threadId?: number) => {
     const b = bridges.get(key);
     if (b) {
       b.ws.send(JSON.stringify({ type: "stop" }));
       b.ws.close();
       bridges.delete(key);
     }
-    saveTgBindings(loadTgBindings().filter((x: any) => x.key !== key));
+    // The session is stopped → drop it from the one registry (removes it from
+    // the web UI too).
+    const ch = channelForTelegram(chatId, threadId);
+    if (ch) removeChannel(ch.sessionId);
   };
 
   const handleMessage = async (msg: any) => {
@@ -356,17 +374,22 @@ export function startTelegram(port: number): void {
           }
           const newThread = t.result.message_thread_id;
           // A group agent is isolated in its own worktree (a board of agents).
-          openBridge(bindKey(chat, newThread), chat.id, newThread, { worktree: true });
+          openBridge(bindKey(chat, newThread), chat.id, newThread, { worktree: true, name });
           await reply(chat.id, newThread, `🤖 Agent « ${name} » ready (isolated worktree). Send it a task.`);
           return;
         }
         case "new":
         case "end":
-          endBinding(key);
+          endBinding(key, chat.id, threadId);
           await reply(chat.id, threadId, cmd.cmd === "new" ? "🔄 fresh session — send a message." : "🛑 session ended.");
           return;
         case "list": {
-          const lines = loadTgBindings().map((x: any) => `• ${x.key} → ${String(x.sessionId).slice(0, 8)}`);
+          const lines = loadChannels()
+            .filter((c) => c.telegram)
+            .map((c) => {
+              const where = c.telegram!.threadId ? `topic ${c.telegram!.threadId}` : "here";
+              return `• ${c.name ?? c.sessionId.slice(0, 8)} (${where})`;
+            });
           await reply(chat.id, threadId, lines.length ? lines.join("\n") : "no sessions bound yet.");
           return;
         }

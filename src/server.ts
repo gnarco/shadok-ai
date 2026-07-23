@@ -18,8 +18,16 @@ import { TmuxPilot, tmuxAvailable, tmuxHasSession, tmuxPaneCwd } from "./tmux.js
 import { scanUsage, sessionFilePath, tailSession, type TokenUsage } from "./tail.js";
 import { computePace, paceBlock, WINDOW_SEC } from "./pace.js";
 import { getUsage, type Window } from "./usage.js";
-import { loadChannels, saveChannels, loadGroups, saveGroups } from "./channels.js";
+import {
+  loadChannels,
+  loadGroups,
+  saveGroups,
+  upsertChannel,
+  removeChannel,
+  mergeClientChannels,
+} from "./channels.js";
 import { startTelegram } from "./telegram.js";
+import { migrateTgBindings } from "./channels.js";
 import {
   createWorktree,
   ensureWorktreeCheckout,
@@ -96,8 +104,10 @@ app.get("/defaults", (_req, res) => {
 // browser, another device, a restart or a reboot.
 app.get("/channels", (_req, res) => res.json(loadChannels()));
 app.put("/channels", (req, res) => {
-  saveChannels(Array.isArray(req.body) ? req.body : []);
-  res.json({ ok: true });
+  // Merge, don't overwrite: the browser owns order + name/group, but must never
+  // drop a live or Telegram-bound session or strip server-owned fields.
+  const live = new Set([...sessions.values()].filter((s) => !s.pilot.hasExited).map((s) => s.id));
+  res.json(mergeClientChannels(Array.isArray(req.body) ? req.body : [], live));
 });
 app.get("/groups", (_req, res) => res.json(loadGroups()));
 app.put("/groups", (req, res) => {
@@ -644,6 +654,7 @@ wss.on("connection", (ws: WebSocket) => {
               cwd: session.cwd,
               lastTurnMs: session.lastTurnMs,
             });
+            upsertChannel({ sessionId: id, cwd: session.cwd, branch: session.worktree?.branch ?? null });
             send({ type: "tokens", tokens: tokenTotals(session) });
             if (session.contextPct !== null) send({ type: "context", pct: session.contextPct });
             send({
@@ -669,6 +680,7 @@ wss.on("connection", (ws: WebSocket) => {
             cwd: effectiveCwd,
             branch: worktree?.branch ?? null,
           });
+          upsertChannel({ sessionId: id, cwd: effectiveCwd, branch: worktree?.branch ?? null });
           send({ type: "tokens", tokens: tokenTotals(session) });
             if (session.contextPct !== null) send({ type: "context", pct: session.contextPct });
           sendPendingDialog(session, send);
@@ -817,6 +829,9 @@ wss.on("connection", (ws: WebSocket) => {
     }
   });
 });
+
+// Fold any legacy separate Telegram bindings into the one channel registry.
+migrateTgBindings();
 
 server.listen(PORT, () => {
   console.log(`shadok-ai web: http://localhost:${PORT}`);
