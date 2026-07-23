@@ -86,6 +86,7 @@ interface Bridge {
   sessionId: string | null;
   ready: boolean;
   pending: string[]; // prompts queued until the WS is ready
+  pendingActions: object[]; // dialog actions (choose/toggle/confirm) queued until ready
   dialogMsgId?: number; // Telegram message showing the current dialog keyboard
   worktree?: boolean; // spawn the session in an isolated worktree
 }
@@ -148,6 +149,7 @@ export function startTelegram(port: number): void {
       sessionId: opts.resumeId ?? null,
       ready: false,
       pending: [],
+      pendingActions: [],
       worktree: opts.worktree,
     };
     bridges.set(key, b);
@@ -174,6 +176,7 @@ export function startTelegram(port: number): void {
           b.ready = true;
           persist();
           for (const p of b.pending.splice(0)) ws.send(JSON.stringify({ type: "prompt", text: p }));
+          for (const a of b.pendingActions.splice(0)) ws.send(JSON.stringify(a));
           break;
         case "working":
           tg("sendChatAction", {
@@ -347,13 +350,14 @@ export function startTelegram(port: number): void {
     const action = parseCallback(cq.data ?? "");
     const msg = cq.message;
     if (!action || !msg) return;
-    const key = bindKey(msg.chat, msg.message_thread_id);
-    const b = bridges.get(key);
-    if (b?.ws.readyState === WebSocket.OPEN) {
-      if (action.kind === "confirm") b.ws.send(JSON.stringify({ type: "confirm" }));
-      else b.ws.send(JSON.stringify({ type: action.kind, n: action.n }));
-    }
-    await tg("answerCallbackQuery", { callback_query_id: cq.id });
+    await tg("answerCallbackQuery", { callback_query_id: cq.id }); // stop the client spinner
+    const wsMsg =
+      action.kind === "confirm" ? { type: "confirm" } : { type: action.kind, n: action.n };
+    // Resume the bridge if the server was restarted since the dialog was shown
+    // (otherwise a click on an orphaned keyboard would silently do nothing).
+    const b = bridgeFor(bindKey(msg.chat, msg.message_thread_id), msg.chat.id, msg.message_thread_id);
+    if (b.ready && b.ws.readyState === WebSocket.OPEN) b.ws.send(JSON.stringify(wsMsg));
+    else b.pendingActions.push(wsMsg);
   };
 
   const handleUpdate = async (u: any) => {
