@@ -1,32 +1,54 @@
 # shadok-ai
 
-> **Working on this codebase?** Read [`CLAUDE.md`](CLAUDE.md) (map, build/run,
-> invariants) and [`docs/architecture.md`](docs/architecture.md) first — they
-> are the current source of truth. This README covers the original single-session
-> library/CLI; shadok-ai is now a multi-session web cockpit (see those docs).
+A **web cockpit that drives multiple real Claude Code sessions in parallel** —
+each channel is one `claude` process, on your Claude subscription (not the API).
+Pilot them from a browser **and** from **Telegram** (one topic = one agent),
+with git-worktree isolation, per-repo secrets, a diff panel, and quota gauges.
 
 ## Quick start
 
 ```bash
-npx shadok-ai            # first run asks once for an optional Telegram bot token
+npx shadok-ai
 ```
 
-Open **http://localhost:3789**. To drive agents from Telegram, send the bot to a
-group with Topics enabled and type `/setup` there; then `/spawn <name>` per agent.
-Keep it current with `/update` (fetches `@latest` and respawns itself). Flags:
-`--port <n>`, `--no-telegram`, `--version`.
+Then open **http://localhost:3789**.
+
+**Prerequisites:** Node ≥ 20 and the [`claude`](https://claude.com/claude-code)
+CLI installed and signed in on the machine (shadok-ai drives your existing
+Claude Code, on your subscription).
+
+On the first run it asks once for an optional **Telegram bot token** (press Enter
+to skip; you can add it later). Flags: `--port <n>`, `--no-telegram`,
+`--version`.
+
+### Telegram (optional)
+
+Add your bot to a group with **Topics** enabled, make it an admin with *Manage
+topics* (and *Delete messages* for `/secret` scrubbing), then in the group:
+
+- `/setup` — bind this group as the board (one group per instance)
+- `/spawn <name>` — a new isolated agent in its own topic (also appears as a web tab)
+- `/secrets` · `/secret KEY value` · `/unsecret KEY` — per-repo env secrets
+- `/update` — fetch `@latest` and respawn (self-update)
+- `/list` · `/new` · `/end`
+
+Web tabs and Telegram topics are **one list** — spawn, rename, and close sync
+both ways, live.
 
 ---
 
-Drives a **Claude Code TUI** session (the interactive `claude` CLI) from Node.js, through a pseudo-terminal.
+> **Hacking on shadok-ai?** Read [`CLAUDE.md`](CLAUDE.md) (map, build/run,
+> invariants) and [`docs/architecture.md`](docs/architecture.md) first.
+
+## How it works
+
+Drives the **Claude Code TUI** (the interactive `claude` CLI) through a pseudo-terminal.
 
 > ⚠️ The Claude Code TUI is not a stable API: a CLI update can break the
 > detection heuristics (`❯`, `⏺`, `esc to interrupt` markers).
 > For production use, prefer the
 > [Claude Agent SDK](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk)
 > or `claude -p --output-format stream-json`.
-
-## How it works
 
 - **node-pty** spawns `claude` inside a real pseudo-terminal (the TUI believes it talks to a human);
 - **@xterm/headless** replays the ANSI stream into a virtual screen: we read
