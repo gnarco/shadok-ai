@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import WebSocket from "ws";
 import {
@@ -9,6 +10,7 @@ import {
   saveTgGroup,
 } from "./channels.js";
 import { resolveRepo, secretKeys, setSecret, deleteSecret } from "./secrets.js";
+import { SHADOK_DIR } from "./config.js";
 import { readAndClearUpdateResult } from "./update-flag.js";
 import { UPDATE_EXIT_CODE } from "./supervisor.js";
 
@@ -23,6 +25,12 @@ import { UPDATE_EXIT_CODE } from "./supervisor.js";
  */
 
 const MSG_LIMIT = 4000; // Telegram hard limit is 4096; leave headroom.
+
+// Downloaded Telegram attachments live OUTSIDE any repo/worktree (never in a
+// diff, never committed by accident). Claude reads them by absolute path.
+const MEDIA_DIR = path.join(SHADOK_DIR, "media");
+const TG_FILE_LIMIT = 20 * 1024 * 1024; // Bot API getFile hard limit
+const MEDIA_MAX_AGE_MS = 30 * 24 * 3600 * 1000; // purge after 30 days
 
 // ── Pure helpers (unit-tested) ───────────────────────────────────────────
 
@@ -272,6 +280,32 @@ export function startTelegram(port: number): void {
     }
   };
 
+  // Purge old attachments at startup — media/ only grows otherwise.
+  try {
+    const cutoff = Date.now() - MEDIA_MAX_AGE_MS;
+    for (const name of fs.readdirSync(MEDIA_DIR)) {
+      const p = path.join(MEDIA_DIR, name);
+      if (fs.statSync(p).mtimeMs < cutoff) fs.unlinkSync(p);
+    }
+  } catch {
+    // dossier absent : rien à purger
+  }
+
+  /** Download one attachment to MEDIA_DIR; returns the absolute path.
+   *  Throws with a user-facing (French) reason on any failure. */
+  const downloadAttachment = async (att: TgAttachment): Promise<string> => {
+    if (att.fileSize && att.fileSize > TG_FILE_LIMIT)
+      throw new Error("fichier trop gros (limite Telegram bot : 20 Mo)");
+    const f = await tg("getFile", { file_id: att.fileId });
+    if (!f?.ok) throw new Error(f?.description ?? "getFile a échoué");
+    const r = await fetch(`https://api.telegram.org/file/bot${token}/${f.result.file_path}`);
+    if (!r.ok) throw new Error(`téléchargement HTTP ${r.status}`);
+    fs.mkdirSync(MEDIA_DIR, { recursive: true });
+    const dest = path.join(MEDIA_DIR, mediaFileName(att));
+    fs.writeFileSync(dest, Buffer.from(await r.arrayBuffer()));
+    return dest;
+  };
+
   // Web-side rename → rename the matching Telegram topic (best effort).
   renameTopicImpl = (chatId, threadId, name) => {
     tg("editForumTopic", { chat_id: chatId, message_thread_id: threadId, name: name.slice(0, 128) });
@@ -451,6 +485,25 @@ export function startTelegram(port: number): void {
       ...extra,
     });
 
+  // A flushed album: download everything, then ONE prompt with all the paths.
+  // One failed file doesn't sink the album — it's reported, the rest is sent.
+  const albums = makeAlbumBuffer<{ b: Bridge; att: TgAttachment; caption?: string }>(async (_gid, items) => {
+    const b = items[0].b;
+    const caption = items.find((i) => i.caption)?.caption;
+    const ok: { path: string; kind: "image" | "file" }[] = [];
+    const failed: string[] = [];
+    for (const i of items) {
+      try {
+        ok.push({ path: await downloadAttachment(i.att), kind: i.att.kind });
+      } catch (e: any) {
+        failed.push(`${i.att.fileName ?? i.att.fileUniqueId} (${e?.message ?? e})`);
+      }
+    }
+    if (failed.length) reply(b.chatId, b.threadId, "⚠️ téléchargement raté : " + failed.join(", "));
+    if (ok.length) promptTo(b, attachmentPrompt(ok, caption));
+    else b.typing.stop(); // rien à envoyer : ne pas laisser « typing » tourner
+  });
+
   const endBinding = (key: string, chatId: number, threadId?: number) => {
     const b = bridges.get(key);
     if (b) {
@@ -465,7 +518,8 @@ export function startTelegram(port: number): void {
   };
 
   const handleMessage = async (msg: any) => {
-    if (typeof msg.text !== "string") return;
+    const att = attachmentOf(msg);
+    if (typeof msg.text !== "string" && !att) return;
     const chat = msg.chat;
     if (allowed.length && !allowed.includes(String(chat.id))) {
       await reply(chat.id, msg.message_thread_id, "⛔ this bot is restricted.");
@@ -473,7 +527,8 @@ export function startTelegram(port: number): void {
     }
     const threadId = msg.message_thread_id as number | undefined;
     const isGroup = chat.type === "group" || chat.type === "supergroup";
-    const cmd = parseCommand(msg.text);
+    // Commands only exist in text messages — a caption is never a command.
+    const cmd = typeof msg.text === "string" ? parseCommand(msg.text) : null;
 
     // One board per instance: a group must be the bound group.
     if (isGroup) {
@@ -613,6 +668,27 @@ export function startTelegram(port: number): void {
     // (turn-done, dialog, pace-blocked, exited, ws close).
     const b = bridgeFor(key, chat.id, threadId, topicName);
     b.typing.start();
+
+    if (att) {
+      const caption = typeof msg.caption === "string" ? msg.caption : undefined;
+      if (msg.media_group_id) {
+        // Album: buffer, flushed as ONE prompt once the group settles.
+        albums.add(`${key}:${msg.media_group_id}`, { b, att, caption });
+        return;
+      }
+      try {
+        const p = await downloadAttachment(att);
+        promptTo(b, attachmentPrompt([{ path: p, kind: att.kind }], caption));
+      } catch (e: any) {
+        b.typing.stop();
+        await reply(
+          chat.id,
+          threadId,
+          `⚠️ je n'ai pas pu télécharger ${att.fileName ?? "la pièce jointe"} (${e?.message ?? e})`,
+        );
+      }
+      return;
+    }
     promptTo(b, msg.text);
   };
 
