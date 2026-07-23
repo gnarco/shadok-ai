@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import express from "express";
 import { WebSocketServer, type WebSocket } from "ws";
@@ -46,9 +47,16 @@ const app = express();
 app.use(express.json({ limit: "1mb" }));
 app.use(express.static(path.join(__dirname, "..", "public")));
 // Markdown parser served locally (history rendering on the client).
-app.get("/vendor/marked.js", (_req, res) =>
-  res.sendFile(path.join(__dirname, "..", "node_modules", "marked", "lib", "marked.umd.js")),
+// Résolu via require.resolve, pas un chemin en dur : dans l'install npm
+// (~/.shadok-ai/app), marked est hoisté au-dessus de node_modules/shadok-ai
+// et le chemin relatif à __dirname 404ait — le client retombait en texte brut.
+const require = createRequire(import.meta.url);
+const markedUmd = path.join(
+  path.dirname(require.resolve("marked/package.json")),
+  "lib",
+  "marked.umd.js",
 );
+app.get("/vendor/marked.js", (_req, res) => res.sendFile(markedUmd));
 // Resumable sessions of a directory (for the "resume by id" picker).
 app.get("/sessions", (req, res) => {
   const cwd = String(req.query.cwd ?? "").trim() || process.cwd();
@@ -198,12 +206,37 @@ type Pilot = PtyPilot | TmuxPilot;
  * (which dies with the server). Falls back to node-pty if tmux is absent.
  */
 const USE_TMUX = process.env.SHADOK_TMUX !== "0" && tmuxAvailable();
+
+/**
+ * System prompt appended to every piloted session (--append-system-prompt):
+ * tells the agent it runs under the shadok-ai cockpit (chat rendering, sibling
+ * sessions, worktree discipline…). Read once from context/pilot-prompt.md;
+ * absent file or SHADOK_PILOT_PROMPT=0 → no injection.
+ */
+const PILOT_PROMPT_PATH = path.join(__dirname, "..", "context", "pilot-prompt.md");
+let pilotPromptCache: string | null | undefined;
+function pilotPrompt(): string | null {
+  if (pilotPromptCache === undefined) {
+    try {
+      pilotPromptCache =
+        process.env.SHADOK_PILOT_PROMPT === "0"
+          ? null
+          : fs.readFileSync(PILOT_PROMPT_PATH, "utf8").trim() || null;
+    } catch {
+      pilotPromptCache = null;
+    }
+  }
+  return pilotPromptCache;
+}
+
 function makePilot(id: string, cwd: string, args: string[]): Pilot {
   // Inject the repo's secrets as env — never written into the working dir.
   const env = secretsForCwd(cwd);
+  const sp = pilotPrompt();
+  const fullArgs = sp ? [...args, "--append-system-prompt", sp] : args;
   return USE_TMUX
-    ? new TmuxPilot({ cwd, args, env, tmuxName: "sk-" + id })
-    : new PtyPilot({ cwd, args, env });
+    ? new TmuxPilot({ cwd, args: fullArgs, env, tmuxName: "sk-" + id })
+    : new PtyPilot({ cwd, args: fullArgs, env });
 }
 
 interface Live {

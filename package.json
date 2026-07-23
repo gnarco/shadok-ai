@@ -28,7 +28,8 @@
   },
   "files": [
     "dist",
-    "public"
+    "public",
+    "context"
   ],
   "dependencies": {
     "@xterm/headless": "^6.0.0",
