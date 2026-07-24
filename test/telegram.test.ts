@@ -1,6 +1,18 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { bindKey, chunk, parseCommand, dialogKeyboard, parseCallback, makeTyping, mdToTelegramHtml } from "../src/telegram.js";
+import {
+  bindKey,
+  chunk,
+  parseCommand,
+  dialogKeyboard,
+  parseCallback,
+  makeTyping,
+  mdToTelegramHtml,
+  attachmentOf,
+  mediaFileName,
+  attachmentPrompt,
+  makeAlbumBuffer,
+} from "../src/telegram.js";
 
 test("bindKey: DM, group, and forum topic map to distinct keys", () => {
   assert.equal(bindKey({ id: 42, type: "private" }), "private:42");
@@ -143,4 +155,101 @@ test("mdToTelegramHtml: bare <>& are escaped so the HTML is well-formed", () => 
 
 test("mdToTelegramHtml: a lone marker stays literal (no unbalanced tag)", () => {
   assert.equal(mdToTelegramHtml("2 * 3 = 6"), "2 * 3 = 6");
+});
+
+test("attachmentOf: photo → la plus grande taille, kind image", () => {
+  const att = attachmentOf({
+    photo: [
+      { file_id: "small", file_unique_id: "u1", file_size: 100 },
+      { file_id: "big", file_unique_id: "u2", file_size: 5000 },
+    ],
+  });
+  assert.deepEqual(att, { fileId: "big", fileUniqueId: "u2", kind: "image", fileSize: 5000 });
+});
+
+test("attachmentOf: document image/* → kind image, garde le nom", () => {
+  const att = attachmentOf({
+    document: { file_id: "f", file_unique_id: "u", file_name: "shot.png", mime_type: "image/png", file_size: 42 },
+  });
+  assert.deepEqual(att, { fileId: "f", fileUniqueId: "u", kind: "image", fileName: "shot.png", fileSize: 42 });
+});
+
+test("attachmentOf: document quelconque → kind file", () => {
+  const att = attachmentOf({
+    document: { file_id: "f", file_unique_id: "u", file_name: "rapport.pdf", mime_type: "application/pdf" },
+  });
+  assert.equal(att?.kind, "file");
+  assert.equal(att?.fileName, "rapport.pdf");
+});
+
+test("attachmentOf: message texte pur → null", () => {
+  assert.equal(attachmentOf({ text: "hello" }), null);
+});
+
+test("mediaFileName: nom original préfixé par l'id unique, nettoyé", () => {
+  assert.equal(
+    mediaFileName({ fileId: "f", fileUniqueId: "AQAD", kind: "file", fileName: "../é vil/rapport final.pdf" }),
+    "AQAD-rapport final.pdf",
+  );
+});
+
+test("mediaFileName: photo sans nom → .jpg ; fichier sans nom → id nu", () => {
+  assert.equal(mediaFileName({ fileId: "f", fileUniqueId: "AQAD", kind: "image" }), "AQAD.jpg");
+  assert.equal(mediaFileName({ fileId: "f", fileUniqueId: "AQAD", kind: "file" }), "AQAD");
+});
+
+test("attachmentPrompt: image seule", () => {
+  assert.equal(attachmentPrompt([{ path: "/m/a.jpg", kind: "image" }]), "[Image jointe : /m/a.jpg]");
+});
+
+test("attachmentPrompt: fichier + caption", () => {
+  assert.equal(
+    attachmentPrompt([{ path: "/m/r.pdf", kind: "file" }], "résume ce doc"),
+    "[Fichier joint : /m/r.pdf]\nrésume ce doc",
+  );
+});
+
+test("attachmentPrompt: plusieurs pièces, caption vide ignorée", () => {
+  assert.equal(
+    attachmentPrompt(
+      [
+        { path: "/m/a.jpg", kind: "image" },
+        { path: "/m/b.zip", kind: "file" },
+      ],
+      "  ",
+    ),
+    "[Image jointe : /m/a.jpg]\n[Fichier joint : /m/b.zip]",
+  );
+});
+
+test("makeAlbumBuffer: regroupe les items d'un même album en un seul flush", async () => {
+  const flushed: [string, number[]][] = [];
+  const buf = makeAlbumBuffer<number>((gid, items) => flushed.push([gid, items]), 30);
+  buf.add("g1", 1);
+  buf.add("g1", 2);
+  buf.add("g1", 3);
+  await new Promise((r) => setTimeout(r, 90));
+  assert.deepEqual(flushed, [["g1", [1, 2, 3]]]);
+});
+
+test("makeAlbumBuffer: chaque add réarme le timer (pas de flush partiel)", async () => {
+  const flushed: number[][] = [];
+  const buf = makeAlbumBuffer<number>((_gid, items) => flushed.push(items), 40);
+  buf.add("g", 1);
+  await new Promise((r) => setTimeout(r, 25)); // < délai : pas encore flushé
+  buf.add("g", 2); // réarme
+  await new Promise((r) => setTimeout(r, 25));
+  assert.equal(flushed.length, 0); // 50 ms après le 1er add mais 25 ms après le 2e
+  await new Promise((r) => setTimeout(r, 40));
+  assert.deepEqual(flushed, [[1, 2]]);
+});
+
+test("makeAlbumBuffer: deux albums indépendants", async () => {
+  const flushed = new Map<string, string[]>();
+  const buf = makeAlbumBuffer<string>((gid, items) => flushed.set(gid, items), 20);
+  buf.add("a", "x");
+  buf.add("b", "y");
+  await new Promise((r) => setTimeout(r, 80));
+  assert.deepEqual(flushed.get("a"), ["x"]);
+  assert.deepEqual(flushed.get("b"), ["y"]);
 });
